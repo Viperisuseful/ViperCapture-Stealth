@@ -24,7 +24,7 @@ services:
       VIPERCAPTURE_ALLOW_CUSTOM_PROXIES: ${VIPERCAPTURE_ALLOW_CUSTOM_PROXIES:-1}
       VIPERCAPTURE_CAPTCHA_HANDLER_FACTORY: ${VIPERCAPTURE_CAPTCHA_HANDLER_FACTORY:-}
     volumes:
-      - vipercapture-data:/data
+      - vipercapture-stealth-data:/data
     shm_size: 512mb
     read_only: true
     tmpfs:
@@ -38,4 +38,4 @@ services:
       - no-new-privileges:true
 
 volumes:
-  vipercapture-data:
+  vipercapture-stealth-data:

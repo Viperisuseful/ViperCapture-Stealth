@@ -71,9 +71,9 @@ bucket. Then take an offline volume backup so its encrypted state is consistent:
 mkdir -p backups
 docker compose --env-file .env stop vipercapture
 docker run --rm \
-  -v vipercapture-public_vipercapture-data:/data:ro \
+  -v vipercapture-stealth-public_vipercapture-stealth-data:/data:ro \
   -v "$PWD/backups:/backup" alpine:3.22.1 \
-  tar -C /data -czf /backup/vipercapture-data-$(date -u +%Y%m%dT%H%M%SZ).tar.gz .
+  tar -C /data -czf /backup/vipercapture-stealth-data-$(date -u +%Y%m%dT%H%M%SZ).tar.gz .
 docker compose --env-file .env start vipercapture
 curl --fail http://127.0.0.1:8080/ready
 ```
@@ -86,12 +86,12 @@ umask 077
 age --decrypt --identity /secure/offline-recovery-key.txt \
   --output .env backups/vipercapture-env-TIMESTAMP.age
 chmod 600 .env
-export COMPOSE_PROJECT_NAME=vipercapture-restore
-docker volume create "${COMPOSE_PROJECT_NAME}_vipercapture-data"
+export COMPOSE_PROJECT_NAME=vipercapture-stealth-restore
+docker volume create "${COMPOSE_PROJECT_NAME}_vipercapture-stealth-data"
 docker run --rm \
-  -v "${COMPOSE_PROJECT_NAME}_vipercapture-data:/data" \
+  -v "${COMPOSE_PROJECT_NAME}_vipercapture-stealth-data:/data" \
   -v "$PWD/backups:/backup:ro" alpine:3.22.1 \
-  tar -C /data -xzf /backup/vipercapture-data-TIMESTAMP.tar.gz
+  tar -C /data -xzf /backup/vipercapture-stealth-data-TIMESTAMP.tar.gz
 docker compose --project-name "$COMPOSE_PROJECT_NAME" --env-file .env up -d
 ```
 

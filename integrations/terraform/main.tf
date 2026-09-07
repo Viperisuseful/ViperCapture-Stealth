@@ -27,17 +27,17 @@ variable "control_secret" {
   sensitive = true
 }
 
-resource "docker_image" "vipercapture" {
+resource "docker_image" "vipercapture_stealth" {
   name = var.image
 }
 
-resource "docker_volume" "vipercapture_data" {
-  name = "vipercapture-data"
+resource "docker_volume" "vipercapture_stealth_data" {
+  name = "vipercapture-stealth-data"
 }
 
-resource "docker_container" "vipercapture" {
-  name    = "vipercapture"
-  image   = docker_image.vipercapture.image_id
+resource "docker_container" "vipercapture_stealth" {
+  name    = "vipercapture-stealth"
+  image   = docker_image.vipercapture_stealth.image_id
   restart = "unless-stopped"
 
   ports {
@@ -47,7 +47,7 @@ resource "docker_container" "vipercapture" {
   }
 
   volumes {
-    volume_name    = docker_volume.vipercapture_data.name
+    volume_name    = docker_volume.vipercapture_stealth_data.name
     container_path = "/data"
   }
 
