@@ -164,6 +164,31 @@ class TurnstileCompleteTests(unittest.TestCase):
             )
         )
 
+    def test_auto_pass_stop_when_is_invoked_without_args(self) -> None:
+        """wait_for_challenge_clear calls stop_when() with no args."""
+        page = FakePage([CF_BLOCKING])
+        invoked: list[bool] = []
+
+        async def fake_wait(
+            _page: object,
+            *,
+            timeout_ms: int,
+            navigation_status: int | None,
+            poll_s: float = 0,
+            stop_when=None,
+        ) -> bool:
+            self.assertIsNotNone(stop_when)
+            invoked.append(await stop_when())
+            return False
+
+        with mock.patch("vipercapture.captcha.AUTO_PASS_POLL_S", 8.0):
+            with mock.patch(
+                "vipercapture.captcha.wait_for_challenge_clear",
+                new=fake_wait,
+            ):
+                _run(complete_cloudflare_turnstile(page, timeout_ms=20_000))
+        self.assertEqual(len(invoked), 1)
+
     def test_embedded_widget_is_not_treated_as_cleared(self) -> None:
         page = FakePage([CF_EMBEDDED], clear_after_clicks=1)
         self.assertTrue(
