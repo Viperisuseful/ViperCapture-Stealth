@@ -193,9 +193,11 @@ embedded widget is clicked when reachable; mere `embedded_widget` presence is
 token, success UI, or real-content bypass marker and ignores a stale
 navigation 403 once those appear. The auto-pass wait binds `page` into
 `stop_when` (PR #6) so the checkbox probe cannot TypeError. Interactive
-widgets, many production challenges, and headless Docker/GHCR may still
-remain. Detection is heuristic and returns the provider, kind, confidence, and
-signals in the error details. ViperCapture does not call captcha-solving
+widgets and many production challenges may still remain. Headless
+Docker/GHCR is weaker and less reliable than headed Chrome, but the same
+click path still runs if a locator can reach the checkbox. Detection is
+heuristic and returns the provider, kind, confidence, and signals in the
+error details. ViperCapture does not call captcha-solving
 services, mint Turnstile tokens, spoof WebGL fingerprints, or claim a
 Cloudflare bypass.
 

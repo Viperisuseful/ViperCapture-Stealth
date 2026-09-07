@@ -150,9 +150,12 @@ can actually reach it. Plain-language behavior:
 cleared on scrapingcourse and nowsecure with **persistent headed Chrome**.
 Those are complete-when-possible results, not a product guarantee.
 
-**When it will not:** interactive hard challenges, many production widgets,
-and headless Docker/GHCR (weaker than headed Chrome). A checkbox the
-locator cannot see still needs a human or a site-owner allowlist. Detected
+**When it will not:** interactive hard challenges and many production
+widgets. Headless Docker/GHCR is weaker and less reliable than headed
+Chrome, but the click path is not gated off: if a locator reaches the
+checkbox and a token or success marker appears, the challenge can still
+clear. A checkbox the locator cannot see still needs a human or a
+site-owner allowlist. Detected
 challenges that do not clear return `captcha_detected` unless you opt into
 `proceed_on_captcha` (capture as shown) or an operator-approved external
 handler. See [site access](docs/site-access.md).

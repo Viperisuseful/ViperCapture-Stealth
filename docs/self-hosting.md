@@ -186,8 +186,12 @@ closed-shadow / `cf-chl-widget-*` frames (not a blind `page.evaluate`), no
 false auto-pass on mere `embedded_widget` presence, stale 403 ignored after a
 token / success UI / real-content marker, and `stop_when` bound to `page`
 so the auto-pass probe cannot TypeError. Interactive Turnstile without a
-clickable checkbox, many production widgets, and headless Docker/GHCR still
-cannot complete without a solver or a human. Callers may set
+clickable checkbox still cannot complete without a solver or a human; many
+production widgets are the same. Headless Docker/GHCR is weaker and less
+reliable than headed persistent Chrome, but there is no headless or
+browser-channel guard: if a locator reaches the checkbox and a token or
+success marker appears, `handle_challenge()` still accepts the clear.
+Callers may set
 `proceed_on_captcha: true` to capture the visible challenge as displayed.
 ViperCapture does not ship solvers, token farms, WebGL fingerprint spoofing,
 or a Cloudflare bypass. See
