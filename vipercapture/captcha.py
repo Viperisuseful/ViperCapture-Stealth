@@ -827,7 +827,7 @@ async def complete_cloudflare_turnstile(
         page,
         timeout_ms=auto_pass_ms,
         navigation_status=navigation_status,
-        stop_when=_checkbox_target_available,
+        stop_when=lambda: _checkbox_target_available(page),
     ):
         return await _settle_if_cleared()
 
