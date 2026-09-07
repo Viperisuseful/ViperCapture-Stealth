@@ -147,12 +147,14 @@ matter.
 - `stealth`: uses Patchright Chromium stealth patches and optional headless
   user-agent normalization by default. Set it to `false` to skip extra UA
   rewriting. Patchright’s CDP patches remain active either way. This is not
-  `playwright-stealth` and is not a CAPTCHA bypass.
+  `playwright-stealth` and is not a CAPTCHA bypass. Launch knobs and the
+  headed-Chrome sweet spot are in the README
+  [Stealth mode / Patchright](../README.md#stealth-mode--patchright) section.
 - `captcha`: chooses `error` (default), `capture`, or an operator-provided
   `external` handler when a blocking challenge is detected. Cloudflare
-  Turnstile is clicked via Patchright locators when reachable; that is not a
-  solver and not a Cloudflare bypass. `solver` is a non-secret operator
-  routing alias, never a provider credential.
+  Turnstile is **complete-when-possible** via Patchright locators when
+  reachable; that is not a solver and not a Cloudflare bypass. `solver` is a
+  non-secret operator routing alias, never a provider credential.
 
 Self-hosted mode accepts an HTTP, HTTPS, SOCKS4, or SOCKS5 proxy in
 `network.proxy`. Credentials are separate fields and are never embedded in the
@@ -182,15 +184,20 @@ CAPTCHA detection recognizes blocking interstitials from Cloudflare,
 reCAPTCHA, hCaptcha, Arkose Labs, DataDome, AWS WAF, GeeTest, Friendly Captcha,
 MTCaptcha, Imperva, and HUMAN/PerimeterX, including widgets inside open shadow
 roots. Closed-shadow Cloudflare iframes (`cf-chl-widget-*`) are detected with
-Patchright frames/locators because `page.evaluate` cannot see them. An ordinary
-embedded widget from a non-Cloudflare provider does not fail a capture until it
-becomes a blocking challenge. A Cloudflare Turnstile embedded widget is clicked
-when reachable; it is not treated as already passed. After a click, Stealth
-waits for a token, success UI, or real-content bypass marker and ignores a
-stale navigation 403 once those appear. Interactive widgets may still remain.
-Detection is heuristic and returns the provider, kind, confidence, and signals
-in the error details. ViperCapture does not call captcha-solving services, mint
-Turnstile tokens, or claim a Cloudflare bypass.
+Patchright frames/locators because `page.evaluate` cannot see them; the click
+path uses those locators rather than a blind evaluate into closed shadow. An
+ordinary embedded widget from a non-Cloudflare provider does not fail a
+capture until it becomes a blocking challenge. A Cloudflare Turnstile
+embedded widget is clicked when reachable; mere `embedded_widget` presence is
+**not** treated as already passed (PR #5). After a click, Stealth waits for a
+token, success UI, or real-content bypass marker and ignores a stale
+navigation 403 once those appear. The auto-pass wait binds `page` into
+`stop_when` (PR #6) so the checkbox probe cannot TypeError. Interactive
+widgets, many production challenges, and headless Docker/GHCR may still
+remain. Detection is heuristic and returns the provider, kind, confidence, and
+signals in the error details. ViperCapture does not call captcha-solving
+services, mint Turnstile tokens, spoof WebGL fingerprints, or claim a
+Cloudflare bypass.
 
 An authorized caller can also complete an access flow with an independent
 external tool, then submit a fresh render using short-lived, target-scoped

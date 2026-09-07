@@ -27,16 +27,140 @@ and other WAFs.
   plus the `stop_when` bind fix (#6)
 - **Chromium-only** — Firefox and WebKit requests are rejected
 
-This is a prerelease. It is **not** a Cloudflare bypass.
+This is a prerelease. It is **not** a Cloudflare bypass. See
+[Stealth mode / Patchright](#stealth-mode--patchright) for install, env knobs,
+Turnstile complete-when-possible, and the headed-Chrome sweet-spot quickstart.
 
 ViperCapture Stealth is an MIT-licensed browser renderer for infrastructure
 you control. Send a URL, HTML, or Markdown and receive screenshots, PDFs,
 AVIF images, WebM/MP4/GIF video, hydrated HTML, Markdown, or structured
 metadata through a JSON API.
 
-## Stealth, Cloudflare, and WAF
+## Stealth mode / Patchright
 
-Stealth comes from **Patchright’s supported surface**, not custom exploits:
+This section is the how-to for Stealth / Patchright / Turnstile / Cloudflare
+**challenge handling**. It is **not** a universal Cloudflare bypass. Prefer
+the language “complete-when-possible”: Stealth clicks a reachable Turnstile
+checkbox through Patchright’s supported surface and waits for a real pass
+marker. Many production widgets and interactive hard challenges will still
+remain. For sites you administer, keep using the least-privilege
+[Cloudflare/WAF authorization guide](docs/site-access.md).
+
+### Install Patchright browsers
+
+Install **either** Google Chrome (sweet-spot path) **or** bundled Chromium
+(Docker/CI/headless path):
+
+```bash
+python -m patchright install chrome      # headed persistent Chrome
+python -m patchright install chromium    # bundled Chromium (Docker/GHCR/CI)
+```
+
+On Linux, add `--with-deps` if system libraries are missing
+(`python -m patchright install --with-deps chrome`). Omit `--with-deps` on
+macOS and Windows.
+
+`python launch.py` already runs that install after creating `.venv` and
+installing `requirements.txt`. The target is `chrome` when
+`VIPERCAPTURE_BROWSER_CHANNEL=chrome` **or** when the DISPLAY sweet spot is
+active; otherwise it installs `chromium`. Subsequent launches skip the
+browser install when the Patchright version and target have not changed.
+
+### Headed Chrome sweet spot vs headless Docker
+
+Patchright’s strongest **supported** setup is **headed Google Chrome** with a
+persistent profile, native window size, and no custom user-agent
+(`launch_persistent_context`, `channel="chrome"`, `headless=False`,
+`no_viewport=True`). That is the path that cleared public test widgets in
+A/B (scrapingcourse + nowsecure). Headless Chromium in slim images is weaker
+and more detectable.
+
+The GHCR/Docker default still uses **headless bundled Chromium** and
+`launch()` + `new_context()` so `ghcr.io/viperisuseful/vipercapture-stealth`
+is usable without a display or system Chrome. CI stays on that path. Do not
+force headed Chrome inside the published image.
+
+When `DISPLAY` or `WAYLAND_DISPLAY` is set on a workstation **outside
+Docker**, sweet-spot defaults apply automatically (persistent + `chrome` +
+headed + `no_viewport`). Docker is detected via `/.dockerenv` or
+`VIPERCAPTURE_IN_DOCKER=1`; container Xvfb `DISPLAY` does **not** turn on
+the sweet spot. Explicit `VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=0` or `=1` always
+wins. The image pins `VIPERCAPTURE_HEADLESS=1`,
+`VIPERCAPTURE_BROWSER_CHANNEL=chromium`,
+`VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=0`, and
+`VIPERCAPTURE_PATCHRIGHT_PERSISTENT=0`.
+
+This fork is **Chromium-only**. Requests with `engine: "firefox"` or
+`"webkit"` are rejected. Firefox and WebKit are not installed.
+
+### Environment knobs
+
+Defaults below match `vipercapture/browser_launch.py` and the Dockerfile
+pins at this tip. Empty / unset uses the Default column.
+
+| Knob | Default | Notes |
+| --- | --- | --- |
+| `VIPERCAPTURE_PATCHRIGHT_SWEETSPOT` | auto when `DISPLAY` or `WAYLAND_DISPLAY` is set **and** not Docker; else `0` | Composite: persistent + headed Chrome + `no_viewport`. Explicit `=0` or `=1` wins. Docker pins of `HEADLESS` / `CHANNEL` still win over those two defaults. |
+| `VIPERCAPTURE_PATCHRIGHT_PERSISTENT` | `0` (on when sweet spot is on) | `launch_persistent_context` with a durable `user_data_dir` under `VIPERCAPTURE_DATA_DIR/patchright-profiles` (or `VIPERCAPTURE_PATCHRIGHT_USER_DATA_DIR`) |
+| `VIPERCAPTURE_BROWSER_CHANNEL` | `chromium` (defaults to `chrome` when sweet spot is on **and** this knob is unset) | `chromium` or `chrome` only. Install the matching browser first. |
+| `VIPERCAPTURE_HEADLESS` | `1` (defaults to `0` when sweet spot is on **and** this knob is unset) | Set `0` for headed mode when a display is available. Do not force headed in Docker/GHCR. |
+| `VIPERCAPTURE_PATCHRIGHT_NO_VIEWPORT` | off unless persistent headed Chrome | Use the real window instead of a fixed viewport. |
+| `VIPERCAPTURE_TURNSTILE_CLICK` | `1` | Click a reachable Turnstile checkbox; set `0` for detect-only. |
+| `VIPERCAPTURE_TURNSTILE_TIMEOUT_MS` | `30000` | Budget for auto-pass wait, checkbox click, and backoff retries (clamped 1000–120000). |
+| `VIPERCAPTURE_SWIFTSHADER` | `0` | Software WebGL on GPU-less Xvfb (`--use-gl=angle --use-angle=swiftshader`). Does **not** spoof GPU fingerprints. |
+| `DISPLAY` / `WAYLAND_DISPLAY` | unset | Workstation display. Triggers sweet-spot auto **only** outside Docker. |
+
+Related: `VIPERCAPTURE_IN_DOCKER=1` forces the “in Docker” branch of sweet-spot
+auto. Persistent profiles skip custom user-agent injection. Per-request
+viewport, user-agent, and proxy context options stay on the default
+`launch()` + `new_context()` path.
+
+### Turnstile complete-when-possible
+
+After PRs [#5](https://github.com/Viperisuseful/ViperCapture-Stealth/pull/5)
+and [#6](https://github.com/Viperisuseful/ViperCapture-Stealth/pull/6),
+Stealth tries to **complete** a Cloudflare Turnstile widget when Patchright
+can actually reach it. Plain-language behavior:
+
+1. **Locator click, not a blind `page.evaluate`.** Closed-shadow Turnstile
+   (typical `cf-chl-widget-*` iframes) is invisible to in-page JavaScript.
+   Stealth uses Patchright frames and locators (`get_by_role("checkbox")`,
+   frame locators, then host widgets) and a human-like mouse path. It does
+   not poke closed shadow through `page.evaluate`.
+2. **Closed-shadow / `cf-chl-widget-*` frames still count.** If evaluate
+   reports `provider=unknown` but a native Turnstile frame exists, the click
+   path still runs (this is what unblocked scrapingcourse-style managed
+   pages).
+3. **No false auto-pass on mere `embedded_widget`.** A visible checkbox is
+   not treated as already passed. Clear requires the widget to be gone, or a
+   token / success UI / real-content bypass marker (`cf-turnstile-response`,
+   “you bypassed”, “you have been verified”, `#challenge-success`).
+4. **`stop_when` must bind `page`.** The auto-pass wait calls `stop_when()`
+   with no arguments. #6 binds
+   `stop_when=lambda: _checkbox_target_available(page)` so that probe cannot
+   `TypeError` on a live challenge page.
+5. **Ignore a stale navigation 403** once a token, success UI, or
+   real-content marker is present. Post-click waits also drop the original
+   403. A leftover 403 is not proof the challenge is still up.
+6. **Retries stay honest.** After a click, Stealth waits, then retries the
+   checkbox with backoff (about 400 / 800 / 1600 ms, up to three attempts)
+   inside `VIPERCAPTURE_TURNSTILE_TIMEOUT_MS`. It never mints tokens.
+
+**When it works:** public test widgets and clickable checkboxes that A/B
+cleared on scrapingcourse and nowsecure with **persistent headed Chrome**.
+Those are complete-when-possible results, not a product guarantee.
+
+**When it will not:** interactive hard challenges, many production widgets,
+and headless Docker/GHCR (weaker than headed Chrome). A checkbox the
+locator cannot see still needs a human or a site-owner allowlist. Detected
+challenges that do not clear return `captcha_detected` unless you opt into
+`proceed_on_captcha` (capture as shown) or an operator-approved external
+handler. See [site access](docs/site-access.md).
+
+### What Patchright actually covers
+
+Stealth comes from **Patchright’s supported surface**, not custom Cloudflare
+exploits:
 
 - Avoids Playwright’s `Runtime.enable` leak by evaluating JavaScript in
   isolated execution contexts
@@ -47,52 +171,62 @@ Stealth comes from **Patchright’s supported surface**, not custom exploits:
 - Interacts with closed shadow DOM through normal locators
 - Injects init scripts via Playwright Routes instead of `Runtime.enable`
 
-This fork does **not** ship CAPTCHA solvers, Cloudflare challenge bypasses,
-token farms, or `playwright-stealth` stacked on Patchright. When a Cloudflare
-Turnstile checkbox is reachable through Patchright frames/locators (including
-closed shadow / `cf-chl-widget-*` iframes that `page.evaluate` cannot see),
-Stealth clicks it with a human-like mouse path and waits for a token, success
-UI, or real-content bypass marker. An embedded Turnstile widget is **not**
-treated as already passed. Interactive Turnstile on many production sites can
-still remain after an honest click; that is an inherent challenge, not a
-product failure you can “bypass.” Detected challenges that do not clear still
-return `captcha_detected` unless you opt into `proceed_on_captcha` (capture as
-shown) or an operator-approved external handler. For sites you administer,
-keep using the least-privilege
-[Cloudflare/WAF authorization guide](docs/site-access.md). Do not treat this
-fork as a general Cloudflare bypass.
+This fork does **not** ship CAPTCHA solvers, token farms, WebGL fingerprint
+spoofing, `playwright-stealth` stacked on Patchright, or a “bypass
+everything” Cloudflare exploit. Do not market it as one.
 
-### Headed Chrome vs headless Docker
+### Sweet-spot quickstart
 
-Patchright’s strongest **supported** setup is **headed Google Chrome** with a
-persistent profile, native window size, and no custom user-agent
-(`launch_persistent_context`, `channel="chrome"`, `headless=False`,
-`no_viewport=True`). Headless Chromium in slim images is weaker and more
-detectable. The GHCR/Docker default still uses **headless bundled Chromium**
-and `launch()` + `new_context()` so `ghcr.io/viperisuseful/vipercapture-stealth`
-is usable without a display or system Chrome. CI stays on that path.
+This is the copy-paste path that cleared scrapingcourse + nowsecure in A/B:
+persistent headed Chrome on a real display (or Xvfb + SwiftShader). Use a
+URL **you own or are authorized to test**. Docker/GHCR defaults are weaker
+and are not this path.
 
-| Knob | Default | Notes |
-| --- | --- | --- |
-| `VIPERCAPTURE_BROWSER_CHANNEL` | `chromium` | Set `chrome` when Google Chrome is installed (`patchright install chrome`) |
-| `VIPERCAPTURE_HEADLESS` | `1` | Set `0` for headed mode when a display is available. Do not force headed in Docker. |
-| `VIPERCAPTURE_PATCHRIGHT_PERSISTENT` | `0` | Opt in to `launch_persistent_context` with a durable `user_data_dir` |
-| `VIPERCAPTURE_PATCHRIGHT_NO_VIEWPORT` | off unless persistent headed Chrome | Use the real window instead of a fixed viewport |
-| `VIPERCAPTURE_PATCHRIGHT_SWEETSPOT` | auto when `DISPLAY` is set **and** not Docker; else `0` | Composite: persistent + headed Chrome + `no_viewport`. Explicit `=0` or `=1` wins. Docker/GHCR stay headless Chromium. |
-| `VIPERCAPTURE_SWIFTSHADER` | `0` | Software WebGL on GPU-less Xvfb. Does not spoof GPU fingerprints. |
-| `VIPERCAPTURE_TURNSTILE_CLICK` | `1` | Click a reachable Turnstile checkbox; disable to detect-only |
-| `VIPERCAPTURE_TURNSTILE_TIMEOUT_MS` | `30000` | Budget for auto-pass wait, checkbox click, and backoff retries |
+```bash
+git clone https://github.com/Viperisuseful/ViperCapture-Stealth.git
+cd ViperCapture-Stealth
 
-When `DISPLAY` (or `WAYLAND_DISPLAY`) is set on a workstation **outside Docker**,
-those sweet-spot defaults apply automatically (persistent + `chrome` + headed +
-`no_viewport`). Set `VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=0` to keep headless
-bundled Chromium. Headed mode is **not** forced in Docker/GHCR: the image pins
-`VIPERCAPTURE_HEADLESS=1`, `VIPERCAPTURE_BROWSER_CHANNEL=chromium`, and
-`VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=0`. Dockerfile also pins
-`VIPERCAPTURE_PATCHRIGHT_PERSISTENT=0`.
+# Composite sweet spot, or the equivalent explicit knobs:
+export VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=1
+# Equivalent:
+#   export VIPERCAPTURE_PATCHRIGHT_PERSISTENT=1
+#   export VIPERCAPTURE_BROWSER_CHANNEL=chrome
+#   export VIPERCAPTURE_HEADLESS=0
+#   export VIPERCAPTURE_PATCHRIGHT_NO_VIEWPORT=1
+#   export VIPERCAPTURE_TURNSTILE_CLICK=1
+# On GPU-less Xvfb (WebGL “no context”):
+#   export VIPERCAPTURE_SWIFTSHADER=1
 
-This fork is **Chromium-only**. Requests with `engine: "firefox"` or
-`"webkit"` are rejected. Firefox and WebKit are not installed.
+python launch.py
+# launch.py creates .venv, installs requirements, then runs
+#   python -m patchright install chrome
+```
+
+If the environment already exists, install Chrome yourself:
+
+```bash
+.venv/bin/python -m patchright install chrome
+# Linux, if system libraries are missing:
+# .venv/bin/python -m patchright install --with-deps chrome
+```
+
+Then render a page you are authorized to capture:
+
+```bash
+curl --fail-with-body http://127.0.0.1:8000/v1/render \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "url": "https://your-authorized-test.example/",
+    "output": "png",
+    "full_page": false,
+    "viewport": {"width": 1280, "height": 720}
+  }' --output capture.png
+```
+
+On a workstation with `DISPLAY` / `WAYLAND_DISPLAY` already set, you can
+omit `VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=1`; launch.py will install Chrome
+and Stealth will take the sweet-spot defaults. Set
+`VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=0` to keep headless bundled Chromium.
 
 ## Features
 
@@ -178,9 +312,11 @@ The launcher prefers uv when it is on `PATH`: it creates `.venv` and installs
 from `requirements.txt`. If uv is missing, it falls back to the standard
 library `venv` module and pip. Set `VIPERCAPTURE_USE_UV=0` to force that pip
 path even when uv is installed. The launcher then installs Patchright
-Chromium, starts the API, and opens `http://127.0.0.1:8000`. Set
-`VIPERCAPTURE_BROWSER_CHANNEL=chrome` and `VIPERCAPTURE_HEADLESS=0` before
-`python launch.py` when you want headed Chrome.
+`chrome` or `chromium` (see [Stealth mode / Patchright](#stealth-mode--patchright)),
+starts the API, and opens `http://127.0.0.1:8000`. For the headed Chrome
+sweet spot, set `VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=1` (or
+`VIPERCAPTURE_BROWSER_CHANNEL=chrome` and `VIPERCAPTURE_HEADLESS=0`) before
+`python launch.py`.
 
 To use Docker instead, run:
 
@@ -275,9 +411,11 @@ pasted Cookie header into an encrypted profile. Pass its returned `id` as
 cookies where the export format supports them.
 
 ViperCapture Stealth detects common blocking CAPTCHA and bot interstitials.
-For Cloudflare Turnstile it will click a reachable “Verify you are human”
-checkbox through Patchright locators/frames and wait for the widget to pass or
-go away, then settle briefly and retry that click once. It does **not** call
+Cloudflare Turnstile is **complete-when-possible** (PRs #5 and #6): locator
+click through closed-shadow / `cf-chl-widget-*` frames, no false auto-pass on
+mere widget presence, stale 403 ignored after a token/success/real-content
+marker. Full behavior and limits are in
+[Stealth mode / Patchright](#stealth-mode--patchright). It does **not** call
 solver APIs, mint tokens, or implement a Cloudflare bypass. Interactive
 Turnstile can still remain after an honest click. The default `captcha.action`
 is `error`; use `capture` to render the uncleared challenge as-is. Operators
@@ -350,12 +488,12 @@ OpenAPI, health, output dimensions, and that Firefox/WebKit are rejected. Pass
 authenticated deployment, set `VIPERCAPTURE_SMOKE_TOKEN` to an API or
 administrator token.
 
-For headed Chrome on a workstation with a display:
+For headed Chrome on a workstation with a display, use the
+[sweet-spot quickstart](#sweet-spot-quickstart) (`VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=1`
+or the equivalent explicit knobs) and:
 
 ```bash
-VIPERCAPTURE_BROWSER_CHANNEL=chrome VIPERCAPTURE_HEADLESS=0 \
-  VIPERCAPTURE_PATCHRIGHT_PERSISTENT=1 \
-  .venv/bin/python -m patchright install chrome
+.venv/bin/python -m patchright install chrome
 ```
 
 On GPU-less Xvfb, headed Chrome often reports WebGL “no context”. Set

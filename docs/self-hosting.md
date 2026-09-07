@@ -17,18 +17,34 @@ Install [uv](https://docs.astral.sh/uv/) if you can; it is the preferred
 dependency installer. Then run `python launch.py`. This is the supported setup
 and startup method. The launcher uses uv when it is on `PATH` and otherwise
 falls back to pip. It creates a virtual environment, installs Patchright
-Chromium (`python -m patchright install chromium`), starts the application,
-and opens the local interface. Set `VIPERCAPTURE_BROWSER_CHANNEL=chrome` and
-`VIPERCAPTURE_HEADLESS=0` for headed Chrome when a display and Google Chrome
-are available. The Docker/GHCR default is headless bundled Chromium: usable
-in slim images, but weaker against bot detection than headed Chrome. Do not
-set `VIPERCAPTURE_HEADLESS=0` in the published image. On a workstation with
-`DISPLAY` set, Stealth defaults to Patchright’s headed persistent Chrome sweet
-spot; set `VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=0` to keep headless Chromium. Opt
-into that path explicitly with `VIPERCAPTURE_PATCHRIGHT_PERSISTENT=1` (or
-`VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=1`) only on a workstation that has Chrome
-and a display. The Docker image already includes FFmpeg. This fork does not
-install Firefox or WebKit.
+browsers, starts the application, and opens the local interface.
+
+Install Chrome and/or Chromium yourself when you are not using the launcher:
+
+```bash
+python -m patchright install chrome       # sweet-spot / headed Chrome
+python -m patchright install chromium     # Docker/CI/headless bundled Chromium
+```
+
+`python launch.py` already runs the matching install: `chrome` when
+`VIPERCAPTURE_BROWSER_CHANNEL=chrome` or the DISPLAY sweet spot is active,
+otherwise `chromium`. On Linux, add `--with-deps` if system libraries are
+missing.
+
+**Sweet spot vs Docker.** Patchright’s supported sweet spot is persistent
+headed Chrome (`VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=1`, or the equivalent
+`VIPERCAPTURE_PATCHRIGHT_PERSISTENT=1`, `VIPERCAPTURE_BROWSER_CHANNEL=chrome`,
+`VIPERCAPTURE_HEADLESS=0`, plus `no_viewport`). That is the path that cleared
+public test widgets in A/B. The Docker/GHCR default is headless bundled
+Chromium: usable in slim images, but weaker against bot detection. Do not set
+`VIPERCAPTURE_HEADLESS=0` in the published image. The image pins
+`VIPERCAPTURE_HEADLESS=1`, `VIPERCAPTURE_BROWSER_CHANNEL=chromium`,
+`VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=0`, and
+`VIPERCAPTURE_PATCHRIGHT_PERSISTENT=0`. On a workstation with `DISPLAY` or
+`WAYLAND_DISPLAY` set **outside Docker**, Stealth defaults to that sweet spot;
+set `VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=0` to keep headless Chromium. Full knob
+table: [Stealth mode / Patchright](../README.md#environment-knobs). The Docker
+image already includes FFmpeg. This fork does not install Firefox or WebKit.
 
 ## Configure a production deployment
 
@@ -164,12 +180,18 @@ and restart the service normally.
 ## Feature limits
 
 The public engine implements the feature set documented in [API and workflows](api.md).
-It blocks detected page-level challenges by default. Cloudflare Turnstile may
-be completed when Patchright can click the checkbox and a token or bypass
-marker appears; interactive Turnstile without a clickable checkbox still
+It blocks detected page-level challenges by default. Cloudflare Turnstile is
+**complete-when-possible** (PRs #5 and #6): locator click through
+closed-shadow / `cf-chl-widget-*` frames (not a blind `page.evaluate`), no
+false auto-pass on mere `embedded_widget` presence, stale 403 ignored after a
+token / success UI / real-content marker, and `stop_when` bound to `page`
+so the auto-pass probe cannot TypeError. Interactive Turnstile without a
+clickable checkbox, many production widgets, and headless Docker/GHCR still
 cannot complete without a solver or a human. Callers may set
 `proceed_on_captcha: true` to capture the visible challenge as displayed.
-ViperCapture does not ship solvers or a Cloudflare bypass.
+ViperCapture does not ship solvers, token farms, WebGL fingerprint spoofing,
+or a Cloudflare bypass. See
+[Stealth mode / Patchright](../README.md#turnstile-complete-when-possible).
 
 Polling-based jobs are enabled by default and use the same rendering contract,
 SSRF controls, concurrency semaphore, and pixel limits as `/v1/render`. The
@@ -224,12 +246,13 @@ scheme, hostname, and port. They are stripped from cross-origin subresources
 and redirects.
 
 Patchright’s CDP patches (Runtime.enable avoidance, Console API disable,
-automation-flag tweaks, closed shadow DOM, init scripts via Routes) are
-always active. They are not a CAPTCHA solver or a custom Cloudflare exploit.
-If a Cloudflare, CDN, WAF, or origin rule still blocks captures of a site you
-administer, use the scoped pattern in [site access](site-access.md): fixed
-renderer address, exact host and path, and an origin-only secret header. It
-does not disable or evade challenges on third-party sites.
+automation-flag tweaks, closed shadow DOM via locators, init scripts via
+Routes) are always active. They are not a CAPTCHA solver, token farm, WebGL
+fingerprint spoof, or a custom Cloudflare exploit. If a Cloudflare, CDN, WAF,
+or origin rule still blocks captures of a site you administer, use the scoped
+pattern in [site access](site-access.md): fixed renderer address, exact host
+and path, and an origin-only secret header. It does not disable or evade
+challenges on third-party sites.
 
 ## Read diagnostic response headers
 

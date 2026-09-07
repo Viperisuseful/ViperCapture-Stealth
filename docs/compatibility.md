@@ -64,8 +64,10 @@ Vendor sources:
 ## Unsupported managed services
 
 ViperCapture does not provide a managed proxy network, anti-bot bypass, legal
-admissibility opinion, SLA, or continuous render support. The operator manages
-the code version, browsers, network, data, storage, capacity, and cost.
+admissibility opinion, SLA, or continuous render support. Stealth’s Turnstile
+path is complete-when-possible challenge handling (Patchright locators), not a
+universal Cloudflare bypass. The operator manages the code version, browsers,
+network, data, storage, capacity, and cost.
 
 For a target the operator owns, the [site access guide](site-access.md) documents
 a narrow Cloudflare/WAF exception using the renderer address, exact host and
