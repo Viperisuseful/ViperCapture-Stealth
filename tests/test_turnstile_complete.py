@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -12,6 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from vipercapture.captcha import (  # noqa: E402
+    CLICK_TIMEOUT_MS,
     click_turnstile_widget,
     complete_cloudflare_turnstile,
     handle_challenge,
@@ -91,7 +93,7 @@ class TurnstileCompleteTests(unittest.TestCase):
         self._now = 1_000.0
 
         def tick() -> float:
-            self._now += 1.0
+            self._now += 0.01
             return self._now
 
         self.settle = mock.patch("vipercapture.captcha.POST_PASS_SETTLE_MS", 0)
@@ -208,6 +210,93 @@ class TurnstileCompleteTests(unittest.TestCase):
         lowered = source.lower()
         for needle in ("2captcha", "anti-captcha", "anticaptcha", "capsolver", "twocaptcha"):
             self.assertNotIn(needle, lowered)
+
+    def test_locator_attempts_are_bounded_by_timeout(self) -> None:
+        self.clock.stop()
+        self.sleep.stop()
+        timeouts: list[int] = []
+
+        class FailLocator:
+            def __init__(self) -> None:
+                self.first = self
+
+            async def click(self, timeout: int = 0) -> None:
+                timeouts.append(timeout)
+                await asyncio.sleep(timeout / 1_000)
+                raise TimeoutError("checkbox not reachable")
+
+        class FailFrame:
+            url = "https://challenges.cloudflare.com/turnstile"
+
+            def get_by_role(self, _role: str) -> FailLocator:
+                return FailLocator()
+
+            def locator(self, _selector: str) -> FailLocator:
+                return FailLocator()
+
+        class FailPage:
+            frames = [FailFrame()]
+
+            def frame_locator(self, _selector: str) -> FailFrame:
+                return FailFrame()
+
+            def locator(self, _selector: str) -> FailLocator:
+                return FailLocator()
+
+        started = time.monotonic()
+        clicked = _run(click_turnstile_widget(FailPage(), timeout_ms=180))
+        elapsed = time.monotonic() - started
+        self.assertFalse(clicked)
+        self.assertTrue(timeouts)
+        self.assertTrue(all(item <= 180 for item in timeouts))
+        self.assertLess(sum(timeouts), 4 * 6 * CLICK_TIMEOUT_MS)
+        self.assertLess(elapsed, 1.5)
+
+    def test_complete_turnstile_does_not_exceed_configured_timeout(self) -> None:
+        self.clock.stop()
+        self.sleep.stop()
+        timeouts: list[int] = []
+
+        class FailLocator:
+            def __init__(self) -> None:
+                self.first = self
+
+            async def click(self, timeout: int = 0) -> None:
+                timeouts.append(timeout)
+                await asyncio.sleep(timeout / 1_000)
+                raise TimeoutError("checkbox not reachable")
+
+        class FailFrame:
+            url = "https://challenges.cloudflare.com/turnstile"
+
+            def get_by_role(self, _role: str) -> FailLocator:
+                return FailLocator()
+
+            def locator(self, _selector: str) -> FailLocator:
+                return FailLocator()
+
+        class FailPage:
+            frames = [FailFrame()]
+
+            async def evaluate(
+                self, _script: str, _payload: dict[str, object]
+            ) -> dict[str, object]:
+                return CF_BLOCKING
+
+            def frame_locator(self, _selector: str) -> FailFrame:
+                return FailFrame()
+
+            def locator(self, _selector: str) -> FailLocator:
+                return FailLocator()
+
+        started = time.monotonic()
+        cleared = _run(complete_cloudflare_turnstile(FailPage(), timeout_ms=1_000))
+        elapsed = time.monotonic() - started
+        self.assertFalse(cleared)
+        self.assertTrue(timeouts)
+        self.assertTrue(all(item <= 1_000 for item in timeouts))
+        self.assertLess(sum(timeouts), 4 * 6 * CLICK_TIMEOUT_MS)
+        self.assertLess(elapsed, 2.5)
 
 
 if __name__ == "__main__":

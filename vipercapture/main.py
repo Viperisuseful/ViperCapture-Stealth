@@ -378,6 +378,8 @@ async def _launch_browser(
     playwright: Playwright,
     gpu_mode: str | None = None,
     engine: BrowserEngine = BrowserEngine.CHROMIUM,
+    *,
+    user_data_dir: Path | None = None,
 ) -> Browser:
     selected_mode = gpu_mode or GPU_MODE
     if engine is not BrowserEngine.CHROMIUM:
@@ -390,6 +392,7 @@ async def _launch_browser(
         gpu_backend=GPU_BACKEND,
         headless=HEADLESS,
         channel=BROWSER_CHANNEL,
+        user_data_dir=user_data_dir,
     )
     if selected_mode == "required" and engine.value == BrowserEngine.CHROMIUM.value:
         try:
@@ -652,24 +655,37 @@ async def _record_browser_render(app: FastAPI, browser: Browser) -> None:
                     _sync_primary_browser(app)
             return
         replacement = None
+        reused_profile = getattr(browser, "user_data_dir", None)
+        closed_old = False
         try:
             async with app.state.browser_restart_lock:
                 needs_replacement = (
                     len(_connected_pool(app, engine)) < _pool_size_for(engine)
                 )
             if needs_replacement:
+                if reused_profile is not None:
+                    try:
+                        await _close_browser(app, browser)
+                        closed_old = True
+                    except Exception:
+                        _retain_browser_for_shutdown(app, browser)
+                        reused_profile = None
                 replacement = await asyncio.wait_for(
                     _launch_browser(
-                        app.state.playwright, app.state.gpu_mode, engine
+                        app.state.playwright,
+                        app.state.gpu_mode,
+                        engine,
+                        user_data_dir=reused_profile,
                     ),
                     timeout=15,
                 )
         except Exception:
             async with app.state.browser_restart_lock:
-                app.state.browsers.setdefault(engine, []).append(browser)
-                counts[browser_id] = 0
-                if engine is BrowserEngine.CHROMIUM:
-                    _sync_primary_browser(app)
+                if not closed_old:
+                    app.state.browsers.setdefault(engine, []).append(browser)
+                    counts[browser_id] = 0
+                    if engine is BrowserEngine.CHROMIUM:
+                        _sync_primary_browser(app)
             return
         async with app.state.browser_restart_lock:
             if replacement is not None:
@@ -685,6 +701,8 @@ async def _record_browser_render(app: FastAPI, browser: Browser) -> None:
         if replacement is not None:
             with suppress(Exception):
                 await _close_browser(app, replacement)
+        if closed_old:
+            return
         try:
             await _close_browser(app, browser)
         except Exception:
