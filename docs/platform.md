@@ -114,18 +114,34 @@ Patchright’s “do not inject a custom user-agent” guidance. Set
 `stealth:false` to skip the UA rewrite for diagnosis. This is not
 `playwright-stealth` and is not a CAPTCHA or Cloudflare exploit.
 
-Prefer headed Chrome when the environment allows:
+Prefer headed Chrome when the environment allows it **and** you are not in
+Docker/GHCR. When `DISPLAY` is set on a workstation:
 
 ```bash
 VIPERCAPTURE_BROWSER_CHANNEL=chrome
 VIPERCAPTURE_HEADLESS=0
+VIPERCAPTURE_PATCHRIGHT_PERSISTENT=1
 ```
 
-Docker/GHCR defaults remain `chromium` + `VIPERCAPTURE_HEADLESS=1`. Headless
-Chromium in slim images is weaker than headed Chrome.
+`VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=1` turns on that persistent headed Chrome
+path (including `no_viewport`) unless Docker-style env already pins
+`VIPERCAPTURE_HEADLESS=1` / `VIPERCAPTURE_BROWSER_CHANNEL=chromium`.
+Docker/GHCR defaults remain `chromium` + `VIPERCAPTURE_HEADLESS=1` with
+`launch()` + `new_context()`. Headless Chromium in slim images is weaker than
+headed Chrome. Persistent mode uses a durable user-data directory under
+`VIPERCAPTURE_DATA_DIR/patchright-profiles` (or
+`VIPERCAPTURE_PATCHRIGHT_USER_DATA_DIR`) and skips custom user-agent injection.
+Per-request viewport, user-agent, and proxy context options stay on the default
+`launch()` + `new_context()` path; persistent mode is the Patchright sweet spot,
+not a second full isolated-context renderer.
 
-ViperCapture only detects CAPTCHA/bot challenges. To let an operator connect
-an approved internal or third-party integration, set
+Cloudflare Turnstile: Stealth clicks a reachable checkbox via Patchright
+frames/locators, waits for the interstitial to clear, and retries once. This
+is not a Cloudflare bypass. Interactive challenges may still need a human or
+a site-owner allowlist.
+
+ViperCapture only auto-clicks that Turnstile widget; it does not ship solvers.
+To let an operator connect an approved internal or third-party integration, set
 `VIPERCAPTURE_CAPTCHA_HANDLER_FACTORY=package.module:create_handler`. The
 factory is called once at startup and must return an async callable with this
 contract:

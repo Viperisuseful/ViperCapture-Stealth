@@ -1098,7 +1098,7 @@ export default function App() {
             <AlertTriangle />
             <AlertDialogTitle>CAPTCHA detected</AlertDialogTitle>
             <AlertDialogDescription>
-              {captchaWarning?.provider} is blocking the page. You can capture the visible challenge, but ViperCapture Stealth will not solve or bypass it.
+              {captchaWarning?.provider} is blocking the page. Stealth can click a reachable Cloudflare Turnstile checkbox; interactive challenges may still remain. This is not a Cloudflare bypass. You can capture the visible challenge as shown.
               {captchaWarning?.requestId ? ` Request ${captchaWarning.requestId}.` : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>

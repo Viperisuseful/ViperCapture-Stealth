@@ -56,8 +56,10 @@ Preserve the public engine's main security boundaries: public HTTP(S) targets
 only, redirect and DNS checks, same-origin routing for custom headers, strict
 request validation, and bounded browser work. Never commit secrets, cookies,
 private URLs, generated captures, virtual environments, or browser binaries.
-Do not add custom Cloudflare exploits, CAPTCHA solvers, or stack
-`playwright-stealth` on top of Patchright.
+Do not add custom Cloudflare exploits, CAPTCHA solving APIs, token farms,
+WebGL fingerprint spoofing, or stack `playwright-stealth` on top of
+Patchright. Clicking a reachable Turnstile checkbox through Patchright
+locators is allowed; claiming a general Cloudflare bypass is not.
 
 The main files are:
 

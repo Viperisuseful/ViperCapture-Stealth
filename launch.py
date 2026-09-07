@@ -211,6 +211,14 @@ def main() -> None:
 
     # ── Start the server ────────────────────────────────────────
     print(f"\n  Starting server at {URL}")
+    try:
+        from vipercapture.browser_launch import headed_chrome_hint
+
+        hint = headed_chrome_hint()
+        if hint:
+            print(f"  Note: {hint}")
+    except Exception:
+        pass
     print("  Press Ctrl+C here to stop the server.\n")
 
     server = subprocess.Popen(

@@ -149,8 +149,10 @@ matter.
   rewriting. Patchright’s CDP patches remain active either way. This is not
   `playwright-stealth` and is not a CAPTCHA bypass.
 - `captcha`: chooses `error` (default), `capture`, or an operator-provided
-  `external` handler when a blocking challenge is detected. `solver` is a
-  non-secret operator routing alias, never a provider credential.
+  `external` handler when a blocking challenge is detected. Cloudflare
+  Turnstile is clicked via Patchright locators when reachable; that is not a
+  solver and not a Cloudflare bypass. `solver` is a non-secret operator
+  routing alias, never a provider credential.
 
 Self-hosted mode accepts an HTTP, HTTPS, SOCKS4, or SOCKS5 proxy in
 `network.proxy`. Credentials are separate fields and are never embedded in the
@@ -180,9 +182,12 @@ CAPTCHA detection recognizes blocking interstitials from Cloudflare,
 reCAPTCHA, hCaptcha, Arkose Labs, DataDome, AWS WAF, GeeTest, Friendly Captcha,
 MTCaptcha, Imperva, and HUMAN/PerimeterX, including widgets inside open shadow
 roots. An ordinary embedded widget does not fail a capture until it becomes a
-blocking challenge. Detection is heuristic and returns the provider, kind,
-confidence, and signals in the error details; ViperCapture does not solve or
-bypass CAPTCHAs.
+blocking challenge. Cloudflare Turnstile interstitials are clicked through
+Patchright frames/locators, waited on, and retried once; interactive widgets
+(including nowsecure.nl) may still remain. Detection is heuristic and returns
+the provider, kind, confidence, and signals in the error details. ViperCapture
+does not call captcha-solving services, mint Turnstile tokens, or claim a
+Cloudflare bypass.
 
 An authorized caller can also complete an access flow with an independent
 external tool, then submit a fresh render using short-lived, target-scoped
