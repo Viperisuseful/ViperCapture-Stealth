@@ -26,6 +26,13 @@ from fastapi.staticfiles import StaticFiles
 from patchright.async_api import Browser, Playwright, async_playwright
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .browser_launch import (
+    browser_channel as resolve_browser_channel,
+    chromium_launch_args,
+    headless_enabled as resolve_headless,
+    launch_chromium,
+    omit_custom_user_agent,
+)
 from .async_jobs import (
     AsyncJobService,
     JobDeferred,
@@ -141,15 +148,12 @@ if GPU_MODE not in {"off", "auto", "required"}:
     raise ValueError("VIPERCAPTURE_GPU_MODE must be off, auto, or required")
 if GPU_BACKEND not in {"default", "vulkan"}:
     raise ValueError("VIPERCAPTURE_GPU_BACKEND must be default or vulkan")
-BROWSER_CHANNEL = os.getenv("VIPERCAPTURE_BROWSER_CHANNEL", "chromium").strip().lower()
+BROWSER_CHANNEL = resolve_browser_channel()
 if BROWSER_CHANNEL not in {"chromium", "chrome"}:
     raise ValueError("VIPERCAPTURE_BROWSER_CHANNEL must be chromium or chrome")
-HEADLESS = os.getenv("VIPERCAPTURE_HEADLESS", "1").strip().lower() not in {
-    "0",
-    "false",
-    "no",
-    "off",
-}
+HEADLESS = resolve_headless()
+
+
 def _optional_env_int(name: str) -> int | None:
     raw = os.getenv(name)
     if raw is None or not str(raw).strip():
@@ -288,17 +292,12 @@ CONTROL_DATABASE = Path(
 METRICS = Metrics()
 
 
-def _uses_chrome_channel() -> bool:
-    return BROWSER_CHANNEL == "chrome"
-
-
 async def _stealth_context_options(
     browser: Browser, payload: RenderRequest
 ) -> dict[str, object]:
-    """Normalize headless Chromium UA only. Skip when using channel=chrome."""
+    """Normalize headless Chromium UA only. Skip Patchright's no-custom-UA path."""
     if (
-        _uses_chrome_channel()
-        or not HEADLESS
+        omit_custom_user_agent(headless=HEADLESS, channel=BROWSER_CHANNEL)
         or payload.network.user_agent is not None
         or payload.environment.device is not DevicePreset.DESKTOP
         or payload.engine is not BrowserEngine.CHROMIUM
@@ -333,12 +332,7 @@ def gpu_launch_args(
     backend: str = GPU_BACKEND,
     platform: str = sys.platform,
 ) -> list[str]:
-    if mode == "off":
-        return []
-    args = ["--enable-gpu"]
-    if backend == "vulkan" and platform.startswith("linux"):
-        args.append("--use-angle=vulkan")
-    return args
+    return chromium_launch_args(mode, backend, platform=platform)
 
 
 def hardware_gpu_active(info: dict[str, object]) -> bool:
@@ -390,19 +384,12 @@ async def _launch_browser(
         raise RuntimeError(
             f"ViperCapture Stealth is Chromium-only; {engine.value} is not supported."
         )
-    browser_type = playwright.chromium
-    launch_options: dict[str, object] = {
-        "headless": HEADLESS,
-        "args": gpu_launch_args(selected_mode),
-        "channel": BROWSER_CHANNEL,
-        "env": {
-            **os.environ,
-            "XDG_CACHE_HOME": "/tmp/chromium-cache",
-            "XDG_CONFIG_HOME": "/tmp/chromium-config",
-        },
-    }
-    browser = await browser_type.launch(
-        **launch_options,
+    browser = await launch_chromium(
+        playwright,
+        gpu_mode=selected_mode,
+        gpu_backend=GPU_BACKEND,
+        headless=HEADLESS,
+        channel=BROWSER_CHANNEL,
     )
     if selected_mode == "required" and engine.value == BrowserEngine.CHROMIUM.value:
         try:

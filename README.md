@@ -38,24 +38,49 @@ Stealth comes from **Patchright’s supported surface**, not custom exploits:
 - Interacts with closed shadow DOM through normal locators
 - Injects init scripts via Playwright Routes instead of `Runtime.enable`
 
-This fork does **not** ship CAPTCHA solvers, Cloudflare challenge bypasses, or
-`playwright-stealth` stacked on Patchright. Detected challenges still return
-`captcha_detected` unless you opt into `proceed_on_captcha` (capture as shown)
-or an operator-approved external handler. For sites you administer, keep using
-the least-privilege [Cloudflare/WAF authorization guide](docs/site-access.md).
+This fork does **not** ship CAPTCHA solvers, Cloudflare challenge bypasses,
+token farms, or `playwright-stealth` stacked on Patchright. When a Cloudflare
+Turnstile checkbox is reachable, Stealth clicks it through Patchright
+frames/locators and waits for the interstitial to clear if it auto-passes or
+accepts that click. Interactive Turnstile (including the public nowsecure.nl
+demo) may still remain; that is an inherent challenge, not a soft auto-pass.
+Detected challenges that do not clear still return `captcha_detected` unless
+you opt into `proceed_on_captcha` (capture as shown) or an operator-approved
+external handler. For sites you administer, keep using the least-privilege
+[Cloudflare/WAF authorization guide](docs/site-access.md). Do not treat this
+fork as a general Cloudflare bypass.
 
 ### Headed Chrome vs headless Docker
 
-Patchright’s strongest setup is **headed Google Chrome**
-(`channel="chrome"`, `headless=False`). Headless Chromium in slim images is
-weaker and more detectable. The GHCR/Docker default still uses **headless
-bundled Chromium** so `ghcr.io/viperisuseful/vipercapture-stealth` is usable
-without a display or system Chrome.
+Patchright’s strongest **supported** setup is **headed Google Chrome** with a
+persistent profile, native window size, and no custom user-agent
+(`launch_persistent_context`, `channel="chrome"`, `headless=False`,
+`no_viewport=True`). Headless Chromium in slim images is weaker and more
+detectable. The GHCR/Docker default still uses **headless bundled Chromium**
+and `launch()` + `new_context()` so `ghcr.io/viperisuseful/vipercapture-stealth`
+is usable without a display or system Chrome. CI stays on that path.
 
 | Knob | Default | Notes |
 | --- | --- | --- |
 | `VIPERCAPTURE_BROWSER_CHANNEL` | `chromium` | Set `chrome` when Google Chrome is installed (`patchright install chrome`) |
-| `VIPERCAPTURE_HEADLESS` | `1` | Set `0` for headed mode when a display is available |
+| `VIPERCAPTURE_HEADLESS` | `1` | Set `0` for headed mode when a display is available. Do not force headed in Docker. |
+| `VIPERCAPTURE_PATCHRIGHT_PERSISTENT` | `0` | Opt in to `launch_persistent_context` with a durable `user_data_dir` |
+| `VIPERCAPTURE_PATCHRIGHT_NO_VIEWPORT` | off unless persistent headed Chrome | Use the real window instead of a fixed viewport |
+| `VIPERCAPTURE_PATCHRIGHT_SWEETSPOT` | `0` | Composite: persistent + headed Chrome + `no_viewport` (still overridden by explicit Docker env) |
+| `VIPERCAPTURE_SWIFTSHADER` | `0` | Software WebGL on GPU-less Xvfb. Does not spoof GPU fingerprints. |
+| `VIPERCAPTURE_TURNSTILE_CLICK` | `1` | Click a reachable Turnstile checkbox; disable to detect-only |
+
+When `DISPLAY` (or `WAYLAND_DISPLAY`) is set on a workstation, the documented
+sweet spot is:
+
+```bash
+VIPERCAPTURE_BROWSER_CHANNEL=chrome
+VIPERCAPTURE_HEADLESS=0
+VIPERCAPTURE_PATCHRIGHT_PERSISTENT=1
+```
+
+That combination is **not** the Docker/GHCR default. Dockerfile pins
+`VIPERCAPTURE_HEADLESS=1` and `VIPERCAPTURE_BROWSER_CHANNEL=chromium`.
 
 This fork is **Chromium-only**. Requests with `engine: "firefox"` or
 `"webkit"` are rejected. Firefox and WebKit are not installed.
@@ -240,15 +265,20 @@ pasted Cookie header into an encrypted profile. Pass its returned `id` as
 `profile_id` on later renders. Imports preserve local storage and partitioned
 cookies where the export format supports them.
 
-ViperCapture Stealth detects common blocking CAPTCHA and bot interstitials but
-does not solve or bypass them. The default `captcha.action` is `error`; use
-`capture` to render the challenge as-is. Operators may configure their own
-approved async handler with `VIPERCAPTURE_CAPTCHA_HANDLER_FACTORY` and opt in
-per request with `captcha.action: "external"`. See the [API guide](docs/api.md)
-for the handler contract and timeout behavior. Alternatively, an authorized
-caller can use an external tool independently, then start a fresh render with
-short-lived, target-scoped session state. This fork ships no provider
-integration, credentials, endorsement, solver, or bypass service.
+ViperCapture Stealth detects common blocking CAPTCHA and bot interstitials.
+For Cloudflare Turnstile it will click a reachable “Verify you are human”
+checkbox through Patchright locators/frames and wait for the widget to pass or
+go away, then settle briefly and retry that click once. It does **not** call
+solver APIs, mint tokens, or implement a Cloudflare bypass. Interactive
+Turnstile can still remain after an honest click. The default `captcha.action`
+is `error`; use `capture` to render the uncleared challenge as-is. Operators
+may configure their own approved async handler with
+`VIPERCAPTURE_CAPTCHA_HANDLER_FACTORY` and opt in per request with
+`captcha.action: "external"`. See the [API guide](docs/api.md) for the handler
+contract and timeout behavior. Alternatively, an authorized caller can use an
+external tool independently, then start a fresh render with short-lived,
+target-scoped session state. This fork ships no provider integration,
+credentials, endorsement, solver, or bypass service.
 
 ## Configure storage and webhooks
 
@@ -311,12 +341,18 @@ OpenAPI, health, output dimensions, and that Firefox/WebKit are rejected. Pass
 authenticated deployment, set `VIPERCAPTURE_SMOKE_TOKEN` to an API or
 administrator token.
 
-For headed Chrome on a workstation:
+For headed Chrome on a workstation with a display:
 
 ```bash
 VIPERCAPTURE_BROWSER_CHANNEL=chrome VIPERCAPTURE_HEADLESS=0 \
+  VIPERCAPTURE_PATCHRIGHT_PERSISTENT=1 \
   .venv/bin/python -m patchright install chrome
 ```
+
+On GPU-less Xvfb, headed Chrome often reports WebGL “no context”. Set
+`VIPERCAPTURE_SWIFTSHADER=1` for software WebGL, or `VIPERCAPTURE_GPU_MODE=auto`
+when a real GPU is present. That enables a GL implementation; it does not
+spoof a GPU fingerprint. Docker/GHCR should keep `VIPERCAPTURE_HEADLESS=1`.
 
 ## License
 

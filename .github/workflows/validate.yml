@@ -28,11 +28,13 @@ jobs:
           npm run build --prefix frontend
           git diff --exit-code -- static/app
       - name: Check launcher installer selection
-        run: python -m unittest tests.test_launch_installer
+        run: python -m unittest tests.test_launch_installer tests.test_browser_launch
       - name: Build and smoke container
         run: |
           python -m compileall -q vipercapture launch.py scripts/smoke.py
           docker build --tag vipercapture:validation .
+          docker run --rm vipercapture:validation \
+            python -m unittest tests.test_browser_launch tests.test_turnstile_complete
           docker run --detach --init --name vipercapture-validation \
             --publish 127.0.0.1:8000:8000 vipercapture:validation
           trap 'docker rm --force vipercapture-validation' EXIT
@@ -76,7 +78,7 @@ jobs:
       - name: Check Python and render engines
         run: |
           python -m compileall -q vipercapture launch.py scripts/smoke.py
-          python -m unittest tests.test_launch_installer
+          python -m unittest tests.test_launch_installer tests.test_browser_launch tests.test_turnstile_complete
           python scripts/smoke.py
       - name: Check frontend
         run: |

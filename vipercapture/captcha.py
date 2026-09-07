@@ -1,13 +1,20 @@
-"""Challenge detection and an operator-supplied CAPTCHA handler hook."""
+"""Challenge detection, Turnstile checkbox clicks, and an operator CAPTCHA hook.
+
+Cloudflare Turnstile handling clicks the visible checkbox through Patchright
+frames/locators and waits for the interstitial to clear. It does not call
+solver APIs, mint tokens, or use undocumented Cloudflare endpoints.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import importlib
 import inspect
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any, AsyncContextManager
 
+from .browser_launch import turnstile_click_enabled, turnstile_timeout_ms
 from .render_errors import RenderError
 
 CaptchaHandler = Callable[[Any, dict[str, object], str | None, int], Awaitable[bool]]
@@ -178,6 +185,167 @@ async def detect_challenge(
     return await page.evaluate(DETECT_CHALLENGE_SCRIPT, {"status": navigation_status})
 
 
+TURNSTILE_FRAME_SELECTORS = (
+    "iframe[src*='challenges.cloudflare.com']",
+    "iframe[src*='/cdn-cgi/challenge-platform/']",
+    "iframe[title*='Cloudflare' i]",
+    ".cf-turnstile iframe",
+)
+TURNSTILE_HOST_SELECTORS = (
+    ".cf-turnstile",
+    "#challenge-stage",
+    "#challenge-form",
+    "#challenge-running",
+)
+TURNSTILE_CHECKBOX_SELECTORS = (
+    "input[type='checkbox']",
+    "[role='checkbox']",
+    "label",
+    ".mark",
+    "body",
+)
+POST_PASS_SETTLE_MS = 750
+AUTO_PASS_POLL_S = 3.0
+CLICK_TIMEOUT_MS = 2_500
+
+
+def challenge_is_blocking(challenge: dict[str, object] | None) -> bool:
+    if not challenge:
+        return False
+    return str(challenge.get("kind") or "") != "embedded_widget"
+
+
+def is_cloudflare_challenge(challenge: dict[str, object] | None) -> bool:
+    return bool(challenge) and str(challenge.get("provider") or "") == "cloudflare"
+
+
+async def _click_locator(locator: Any, timeout_ms: int = CLICK_TIMEOUT_MS) -> bool:
+    if locator is None:
+        return False
+    click = getattr(locator, "click", None)
+    if not callable(click):
+        return False
+    try:
+        await click(timeout=timeout_ms)
+        return True
+    except Exception:
+        return False
+
+
+def _frame_candidates(page: Any) -> list[Any]:
+    frames: list[Any] = []
+    frame_locator = getattr(page, "frame_locator", None)
+    if callable(frame_locator):
+        for selector in TURNSTILE_FRAME_SELECTORS:
+            try:
+                frames.append(frame_locator(selector))
+            except Exception:
+                continue
+    for frame in list(getattr(page, "frames", None) or []):
+        url = str(getattr(frame, "url", "") or "").lower()
+        if "challenges.cloudflare.com" in url or "cdn-cgi/challenge-platform" in url:
+            frames.append(frame)
+    return frames
+
+
+async def click_turnstile_widget(page: Any) -> bool:
+    """Click the Turnstile checkbox via frames/locators. Never forges tokens."""
+    for frame in _frame_candidates(page):
+        get_by_role = getattr(frame, "get_by_role", None)
+        if callable(get_by_role):
+            try:
+                checkbox = get_by_role("checkbox")
+            except Exception:
+                checkbox = None
+            if await _click_locator(checkbox):
+                return True
+        locator_factory = getattr(frame, "locator", None)
+        if callable(locator_factory):
+            for selector in TURNSTILE_CHECKBOX_SELECTORS:
+                try:
+                    target = locator_factory(selector)
+                    first = getattr(target, "first", target)
+                except Exception:
+                    continue
+                if await _click_locator(first):
+                    return True
+    locator_factory = getattr(page, "locator", None)
+    if callable(locator_factory):
+        for selector in (*TURNSTILE_HOST_SELECTORS, *TURNSTILE_FRAME_SELECTORS):
+            try:
+                target = locator_factory(selector)
+                first = getattr(target, "first", target)
+            except Exception:
+                continue
+            if await _click_locator(first):
+                return True
+    return False
+
+
+def challenge_cleared(challenge: dict[str, object] | None) -> bool:
+    return challenge is None or not challenge_is_blocking(challenge)
+
+
+async def wait_for_challenge_clear(
+    page: Any,
+    *,
+    timeout_ms: int,
+    navigation_status: int | None,
+    poll_s: float = 0.25,
+) -> bool:
+    deadline = time.monotonic() + max(0.0, timeout_ms / 1_000)
+    while True:
+        remaining = await detect_challenge(page, navigation_status)
+        if challenge_cleared(remaining):
+            return True
+        remaining_s = deadline - time.monotonic()
+        if remaining_s <= 0:
+            return False
+        await asyncio.sleep(min(poll_s, remaining_s))
+
+
+async def complete_cloudflare_turnstile(
+    page: Any,
+    *,
+    timeout_ms: int,
+    navigation_status: int | None = None,
+) -> bool:
+    """Wait for a managed auto-pass, then click the checkbox and retry once.
+
+    Interactive Turnstile (for example nowsecure.nl) may still remain after an
+    honest click. Callers must treat that as an uncleared challenge.
+    """
+    budget_ms = max(1_000, timeout_ms)
+    auto_pass_ms = min(int(AUTO_PASS_POLL_S * 1_000), budget_ms)
+    if await wait_for_challenge_clear(
+        page,
+        timeout_ms=auto_pass_ms,
+        navigation_status=navigation_status,
+    ):
+        await asyncio.sleep(POST_PASS_SETTLE_MS / 1_000)
+        return True
+
+    clicked = await click_turnstile_widget(page)
+    remaining_ms = max(1_000, budget_ms - auto_pass_ms)
+    if await wait_for_challenge_clear(
+        page,
+        timeout_ms=remaining_ms // 2 if clicked else min(2_000, remaining_ms),
+        navigation_status=navigation_status,
+    ):
+        await asyncio.sleep(POST_PASS_SETTLE_MS / 1_000)
+        return True
+
+    await click_turnstile_widget(page)
+    if await wait_for_challenge_clear(
+        page,
+        timeout_ms=max(1_000, remaining_ms // 2),
+        navigation_status=navigation_status,
+    ):
+        await asyncio.sleep(POST_PASS_SETTLE_MS / 1_000)
+        return True
+    return False
+
+
 async def handle_challenge(
     page: Any,
     *,
@@ -189,6 +357,31 @@ async def handle_challenge(
     budget: Callable[[int], AsyncContextManager[None]] | None = None,
 ) -> None:
     challenge = await detect_challenge(page, navigation_status)
+    if (
+        turnstile_click_enabled()
+        and is_cloudflare_challenge(challenge)
+        and action != "external"
+    ):
+        native_timeout = min(timeout_ms, turnstile_timeout_ms())
+
+        async def attempt_turnstile() -> bool:
+            return await complete_cloudflare_turnstile(
+                page,
+                timeout_ms=native_timeout,
+                navigation_status=navigation_status,
+            )
+
+        try:
+            if budget is None:
+                cleared = await attempt_turnstile()
+            else:
+                async with budget(native_timeout):
+                    cleared = await attempt_turnstile()
+        except TimeoutError:
+            cleared = False
+        if cleared:
+            return
+        challenge = await detect_challenge(page, None) or challenge
     if not challenge or challenge.get("kind") == "embedded_widget":
         return
     if action == "capture":

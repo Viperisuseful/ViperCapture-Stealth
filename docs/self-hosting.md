@@ -21,9 +21,12 @@ Chromium (`python -m patchright install chromium`), starts the application,
 and opens the local interface. Set `VIPERCAPTURE_BROWSER_CHANNEL=chrome` and
 `VIPERCAPTURE_HEADLESS=0` for headed Chrome when a display and Google Chrome
 are available. The Docker/GHCR default is headless bundled Chromium: usable
-in slim images, but weaker against bot detection than headed Chrome. The
-Docker image already includes FFmpeg. This fork does not install Firefox or
-WebKit.
+in slim images, but weaker against bot detection than headed Chrome. Do not
+set `VIPERCAPTURE_HEADLESS=0` in the published image. Opt into Patchright’s
+persistent path with `VIPERCAPTURE_PATCHRIGHT_PERSISTENT=1` (or
+`VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=1`) only on a workstation that has Chrome
+and a display. The Docker image already includes FFmpeg. This fork does not
+install Firefox or WebKit.
 
 ## Configure a production deployment
 
@@ -130,6 +133,25 @@ JavaScript, scrolling waits, and image encoding remain CPU- or network-bound.
 The older `VIPERCAPTURE_ENABLE_GPU=1` setting remains supported as an alias for
 `VIPERCAPTURE_GPU_MODE=auto`.
 
+### GPU-less Xvfb and software WebGL
+
+Headed Chrome on Xvfb without a GPU often fails WebGL with “no context.”
+Upstream OSS Chromium builds sometimes still expose SwiftShader; this fork’s
+default `VIPERCAPTURE_GPU_MODE=off` does not. That is a missing GL
+implementation, not something to “fix” by spoofing WebGL vendor strings.
+
+On GPU-less headed/Xvfb hosts, opt in to software WebGL:
+
+```bash
+VIPERCAPTURE_SWIFTSHADER=1
+```
+
+That adds Angle/SwiftShader flags (`--use-gl=angle`, `--use-angle=swiftshader`,
+`--enable-unsafe-swiftshader`). It does **not** fake a discrete GPU
+fingerprint. If a real GPU is available, prefer `VIPERCAPTURE_GPU_MODE=auto`
+instead of SwiftShader. `VIPERCAPTURE_GPU_MODE=required` will still fail when
+Chromium is on SwiftShader, because that is software rendering.
+
 The local interface also exposes a **GPU rendering** switch. It drains active
 captures, restarts Chromium in `auto` or `off` mode, and reports whether
 Chromium verified hardware compositing. For safety, this runtime switch accepts
@@ -140,9 +162,11 @@ and restart the service normally.
 ## Feature limits
 
 The public engine implements the feature set documented in [API and workflows](api.md).
-It blocks detected page-level challenges by default. Callers may set
-`proceed_on_captcha: true` to capture the visible challenge as displayed;
-ViperCapture never solves or bypasses CAPTCHAs.
+It blocks detected page-level challenges by default. Cloudflare Turnstile may
+be completed when Patchright can click the checkbox; interactive Turnstile can
+still remain. Callers may set `proceed_on_captcha: true` to capture the visible
+challenge as displayed. ViperCapture does not ship solvers or a Cloudflare
+bypass.
 
 Polling-based jobs are enabled by default and use the same rendering contract,
 SSRF controls, concurrency semaphore, and pixel limits as `/v1/render`. The

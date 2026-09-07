@@ -5,8 +5,12 @@ control. ViperCapture Stealth uses Patchright’s supported Chromium stealth
 patches (Runtime.enable avoidance, Console API disable, automation flags,
 closed shadow DOM, init-script injection via Routes). That is not a custom
 Cloudflare exploit or CAPTCHA bypass. The service detects blocking challenges
-and can record the page as shown, but it does not solve CAPTCHAs or evade
-another site's access controls.
+and, for Cloudflare Turnstile, will click a reachable checkbox through
+Patchright frames/locators, wait for a managed auto-pass, and retry that click
+once. It does not call solver APIs, mint tokens, or evade another site's
+access controls. Interactive Turnstile (nowsecure.nl is a known hard demo)
+may still remain after an honest click; treat that as a challenge, not a
+product failure you can “bypass.”
 
 ## Create an access rule
 
@@ -83,9 +87,13 @@ rate limits and security middleware too.
   ID that matched.
 - For a 429, exempt only this narrow integration from the relevant edge or
   origin limit.
-- For `captcha_detected`, remove the challenge from the authorized rule.
-  `proceed_on_captcha: true` captures the challenge as displayed; it does not
-  solve it.
+- For `captcha_detected`, the renderer clicked a reachable Turnstile checkbox
+  if one was present and the challenge still did not clear. For a site you
+  administer, remove the challenge from the authorized rule or complete it as
+  a human. `proceed_on_captcha: true` captures the challenge as displayed; it
+  does not mint tokens or bypass Cloudflare.
+- Interactive Turnstile on public demos such as nowsecure.nl often stays
+  unchecked after a locator click. That is an inherent interactive challenge.
 - For missing fonts or images, inspect the diagnostic bundle for blocked
   cross-origin assets and authorize an asset host only when you control it.
 
