@@ -30,13 +30,13 @@ documentation used for this comparison.
 | Signed webhooks | Yes | Yes | Yes |
 | Expiring signed render links | Yes | Yes | Yes, tokenized render links |
 | Native S3-compatible results | Yes: S3/R2/MinIO/B2 | Yes | Yes, plan-dependent |
-| Chromium / Firefox / WebKit rendering | **Yes** | Chromium | Chromium |
+| Chromium / Firefox / WebKit rendering | **Chromium only (Patchright; Firefox/WebKit rejected)** | Chromium | Chromium |
 | Open shadow-DOM HTML extraction | Yes | Yes | Not documented |
 | Output thumbnail resizing | Yes | Yes | Yes |
 | Bulk endpoint | Yes, up to 100 | Yes | Client/batch workflow |
 | Cron schedules | Yes | External scheduler | Product/no-code workflows documented |
 | Pixel visual diff reports | Yes | Not documented as core render API | Schedule/compare workflow documented |
-| Diagnostic bundle | Yes: artifact, manifest, console, network, redacted HAR 1.2 (allowlisted headers; Chromium CDP + Resource Timing HTTP versions; Firefox/WebKit HTTPS unknown without Timing), redacted trace, WARC | Partial: metadata/error options | Partial: request waterfall/metadata |
+| Diagnostic bundle | Yes: artifact, manifest, degraded console (Patchright disables Console API), network, redacted HAR 1.2 (allowlisted headers; Chromium CDP + Resource Timing HTTP versions), redacted trace, WARC | Partial: metadata/error options | Partial: request waterfall/metadata |
 | Structured CSS-selector extraction | Yes: text, HTML, attributes, geometry | Partial: single-selector content | Partial: predefined extracted content |
 | Deterministic visual testing and baseline store | Yes | Managed service | Managed service |
 | Project API keys, quotas, ownership, audit log | Yes, operator opt-in | Managed | Managed |
@@ -77,7 +77,7 @@ evasion.
 - [Browserless](https://docs.browserless.io/enterprise/open-source) provides
   an open-source Docker deployment. It provides general browser infrastructure:
   REST screenshot/PDF/content
-  endpoints plus Playwright/Puppeteer WebSocket sessions. ViperCapture's focus
+  endpoints plus Playwright/Puppeteer WebSocket sessions. ViperCapture Stealth's focus
   is the artifact workflow around rendering—typed actions, encrypted jobs,
   signed delivery, bulk/schedules, visual diffs, and diagnostic bundles.
 - [ScreenshotAPI](https://www.screenshotapi.net/docs) documents image/PDF and

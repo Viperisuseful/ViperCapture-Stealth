@@ -2,9 +2,9 @@
 
 ## Supported code
 
-This policy covers the open-source ViperCapture engine in this repository. It
-does not cover the hosted ViperCapture service, which uses separate code and
-infrastructure.
+This policy covers the open-source ViperCapture Stealth engine in this
+repository. It does not cover the hosted ViperCapture service, which uses
+separate code and infrastructure.
 
 Only the latest code on `master` is supported. Older commits, archived releases,
 third-party forks, and modified deployments are not supported.

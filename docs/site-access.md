@@ -1,8 +1,12 @@
-# Authorize ViperCapture through Cloudflare or another WAF
+# Authorize ViperCapture Stealth through Cloudflare or another WAF
 
 This guide is for owners and administrators authorizing captures of a site they
-control. ViperCapture detects blocking challenges and can record the page as
-shown, but it does not solve CAPTCHAs or evade another site's access controls.
+control. ViperCapture Stealth uses Patchright’s supported Chromium stealth
+patches (Runtime.enable avoidance, Console API disable, automation flags,
+closed shadow DOM, init-script injection via Routes). That is not a custom
+Cloudflare exploit or CAPTCHA bypass. The service detects blocking challenges
+and can record the page as shown, but it does not solve CAPTCHAs or evade
+another site's access controls.
 
 ## Create an access rule
 

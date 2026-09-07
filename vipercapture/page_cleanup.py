@@ -144,6 +144,7 @@ async def setup_autoconsent(page, mode: ConsentMode) -> AutoConsentSession | Non
             await page.evaluate(
                 "message => window.autoconsentReceiveMessage?.(message)",
                 message,
+                isolated_context=False,
             )
         except Exception:
             pass
@@ -166,7 +167,10 @@ async def setup_autoconsent(page, mode: ConsentMode) -> AutoConsentSession | Non
             await send_to_page({"type": "initResp", "config": config, "rules": rules})
         elif message_type == "eval":
             try:
-                result = await page.evaluate(message.get("code", ""))
+                result = await page.evaluate(
+                    message.get("code", ""),
+                    isolated_context=False,
+                )
             except Exception:
                 result = None
             await send_to_page({"type": "evalResp", "id": message.get("id"), "result": result})

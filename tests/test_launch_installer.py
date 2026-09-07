@@ -83,6 +83,32 @@ class InstallerCommandTests(unittest.TestCase):
             ],
         )
 
+    def test_patchright_installs_chromium_by_default(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VIPERCAPTURE_BROWSER_CHANNEL", None)
+            self.assertEqual(launch.browser_install_targets(), ["chromium"])
+            command = launch.patchright_install_command("/venv/bin/python", with_deps=True)
+            self.assertEqual(
+                command,
+                [
+                    "/venv/bin/python",
+                    "-m",
+                    "patchright",
+                    "install",
+                    "--with-deps",
+                    "chromium",
+                ],
+            )
+
+    def test_patchright_can_install_chrome_channel(self) -> None:
+        with mock.patch.dict(os.environ, {"VIPERCAPTURE_BROWSER_CHANNEL": "chrome"}):
+            self.assertEqual(launch.browser_install_targets(), ["chrome"])
+            command = launch.patchright_install_command("/venv/bin/python", with_deps=False)
+            self.assertEqual(
+                command,
+                ["/venv/bin/python", "-m", "patchright", "install", "chrome"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

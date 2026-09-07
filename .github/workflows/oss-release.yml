@@ -13,7 +13,7 @@ permissions:
   artifact-metadata: write
 
 env:
-  IMAGE: ghcr.io/viperisuseful/vipercapture
+  IMAGE: ghcr.io/viperisuseful/vipercapture-stealth
 
 jobs:
   publish:
@@ -88,7 +88,8 @@ jobs:
           push: true
           tags: ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
           labels: |
-            org.opencontainers.image.source=https://github.com/Viperisuseful/ViperCapture
+            org.opencontainers.image.title=ViperCapture Stealth
+            org.opencontainers.image.source=https://github.com/Viperisuseful/ViperCapture-Stealth
             org.opencontainers.image.revision=${{ steps.version.outputs.commit }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
           provenance: mode=max
@@ -134,7 +135,7 @@ jobs:
             echo "Release $GITHUB_REF_NAME already exists"
             exit 0
           fi
-          flags=(--verify-tag --generate-notes --title "ViperCapture $VERSION")
+          flags=(--verify-tag --generate-notes --title "ViperCapture Stealth $VERSION")
           if [[ "$PRERELEASE" == true ]]; then
             flags+=(--prerelease)
           fi

@@ -58,9 +58,9 @@ combines with the existing animation stabilization. `slices` emits a ZIP
 of bounded-height full-page sections. A diagnostic bundle can add a redacted
 HAR 1.2 log (HTTP versions from Chromium CDP or Resource Timing, allowlisted
 headers, mime types, and timings; query strings, matrix/path parameters,
-cookies, credentials, and bodies omitted; Firefox/WebKit HTTPS versions stay
-`unknown` without Resource Timing), Playwright trace, and WARC
-files. `certification.enabled` produces an
+cookies, credentials, and bodies omitted), Patchright trace, and WARC
+files. Console capture is degraded because Patchright disables the Console
+API. `certification.enabled` produces an
 Ed25519-signed manifest when `VIPERCAPTURE_CERTIFICATION_SECRET` is set to at
 least 32 bytes. Certification proves bundle integrity; it does not by itself
 make a legal-admissibility claim.
@@ -104,10 +104,25 @@ off or `=1` to opt in. The setting controls HTTP(S), SOCKS4, and SOCKS5 proxy
 objects supplied under `network.proxy`; it does not weaken URL validation or
 the recommended network egress firewall.
 
-Stealth scripts are applied to each isolated context by default and align
-language, platform, and user-agent signals with the request. They are balanced
-evasive defaults, not a promise that a site cannot detect automation. Callers
-can set `stealth:false` for diagnosis and compatibility testing.
+Patchright’s CDP stealth patches are always active (Runtime.enable
+avoidance, Console API disable, automation-flag tweaks, closed shadow DOM,
+init scripts via Routes). When `stealth` is true (the default) and the
+process is using headless bundled Chromium, ViperCapture Stealth also
+rewrites `HeadlessChrome` in the user-agent. That extra rewrite is skipped
+for `VIPERCAPTURE_BROWSER_CHANNEL=chrome` or headed mode, matching
+Patchright’s “do not inject a custom user-agent” guidance. Set
+`stealth:false` to skip the UA rewrite for diagnosis. This is not
+`playwright-stealth` and is not a CAPTCHA or Cloudflare exploit.
+
+Prefer headed Chrome when the environment allows:
+
+```bash
+VIPERCAPTURE_BROWSER_CHANNEL=chrome
+VIPERCAPTURE_HEADLESS=0
+```
+
+Docker/GHCR defaults remain `chromium` + `VIPERCAPTURE_HEADLESS=1`. Headless
+Chromium in slim images is weaker than headed Chrome.
 
 ViperCapture only detects CAPTCHA/bot challenges. To let an operator connect
 an approved internal or third-party integration, set

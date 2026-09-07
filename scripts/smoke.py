@@ -96,22 +96,42 @@ def check(base_url: str, *, token: str | None = None) -> None:
     if "/v1/render" not in schema.get("paths", {}):
         raise RuntimeError("OpenAPI does not expose POST /v1/render")
 
-    for engine in ("chromium", "firefox", "webkit"):
-        image = fetch(
-            f"{base_url}/v1/render",
-            token=token,
-            body={
-                "html": "<!doctype html><title>ViperCapture</title><h1>ready</h1>",
-                "engine": engine,
-                "output": "png",
-                "full_page": False,
-                "viewport": {"width": 320, "height": 240},
-            },
-        )
-        if not image.startswith(b"\x89PNG\r\n\x1a\n") or len(image) < 24:
-            raise RuntimeError(f"{engine} did not return a PNG")
-        if struct.unpack(">II", image[16:24]) != (320, 240):
-            raise RuntimeError(f"{engine} returned unexpected dimensions")
+    image = fetch(
+        f"{base_url}/v1/render",
+        token=token,
+        body={
+            "html": "<!doctype html><title>ViperCapture Stealth</title><h1>ready</h1>",
+            "engine": "chromium",
+            "output": "png",
+            "full_page": False,
+            "viewport": {"width": 320, "height": 240},
+        },
+    )
+    if not image.startswith(b"\x89PNG\r\n\x1a\n") or len(image) < 24:
+        raise RuntimeError("chromium did not return a PNG")
+    if struct.unpack(">II", image[16:24]) != (320, 240):
+        raise RuntimeError("chromium returned unexpected dimensions")
+
+    for engine in ("firefox", "webkit"):
+        try:
+            fetch(
+                f"{base_url}/v1/render",
+                token=token,
+                body={
+                    "html": "<!doctype html><title>reject</title>",
+                    "engine": engine,
+                    "output": "png",
+                    "full_page": False,
+                    "viewport": {"width": 320, "height": 240},
+                },
+            )
+        except RuntimeError as exc:
+            if "422" not in str(exc) or "Chromium-only" not in str(exc):
+                raise RuntimeError(
+                    f"{engine} must be rejected as Chromium-only, got: {exc}"
+                ) from exc
+        else:
+            raise RuntimeError(f"{engine} was accepted; this fork is Chromium-only")
 
     metadata = json.loads(
         fetch(
@@ -221,7 +241,7 @@ def main() -> int:
                 process.wait(timeout=5)
         if data_directory is not None:
             data_directory.cleanup()
-    print("ViperCapture smoke check passed")
+    print("ViperCapture Stealth smoke check passed")
     return 0
 
 

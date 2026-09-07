@@ -23,8 +23,7 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
-from playwright.async_api import Browser, Playwright, async_playwright
-from playwright_stealth import Stealth
+from patchright.async_api import Browser, Playwright, async_playwright
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .async_jobs import (
@@ -142,6 +141,15 @@ if GPU_MODE not in {"off", "auto", "required"}:
     raise ValueError("VIPERCAPTURE_GPU_MODE must be off, auto, or required")
 if GPU_BACKEND not in {"default", "vulkan"}:
     raise ValueError("VIPERCAPTURE_GPU_BACKEND must be default or vulkan")
+BROWSER_CHANNEL = os.getenv("VIPERCAPTURE_BROWSER_CHANNEL", "chromium").strip().lower()
+if BROWSER_CHANNEL not in {"chromium", "chrome"}:
+    raise ValueError("VIPERCAPTURE_BROWSER_CHANNEL must be chromium or chrome")
+HEADLESS = os.getenv("VIPERCAPTURE_HEADLESS", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
 def _optional_env_int(name: str) -> int | None:
     raw = os.getenv(name)
     if raw is None or not str(raw).strip():
@@ -278,50 +286,20 @@ CONTROL_DATABASE = Path(
     os.getenv("VIPERCAPTURE_CONTROL_DATABASE", str(CACHE_DIRECTORY.parent / "control.sqlite3"))
 ).expanduser()
 METRICS = Metrics()
-STEALTH = Stealth(
-    navigator_platform_override=(
-        "Win32"
-        if sys.platform.startswith("win")
-        else "MacIntel"
-        if sys.platform == "darwin"
-        else "Linux x86_64"
-    ),
-    sec_ch_ua=False,
-    webgl_vendor=False,
-    init_scripts_only=True,
-)
 
 
-def _stealth_for_request(payload: RenderRequest) -> Stealth:
-    locale = payload.environment.locale or "en-US"
-    languages = (locale, locale.partition("-")[0])
-    user_agent = (payload.network.user_agent or "").lower()
-    platform = (
-        "Win32" if "windows" in user_agent
-        else "iPhone" if "iphone" in user_agent or payload.environment.device.value == "iphone_14"
-        else "MacIntel" if "macintosh" in user_agent or payload.environment.device.value == "ipad"
-        else "Linux armv8l" if "android" in user_agent or payload.environment.device.value == "pixel_7"
-        else STEALTH.navigator_platform_override
-    )
-    return Stealth(
-        navigator_languages_override=languages,
-        navigator_platform_override=platform,
-        navigator_user_agent_override=payload.network.user_agent,
-        sec_ch_ua=False,
-        webgl_vendor=False,
-        init_scripts_only=True,
-    )
-
-
-async def _apply_stealth(context, payload: RenderRequest) -> None:
-    await _stealth_for_request(payload).apply_stealth_async(context)
+def _uses_chrome_channel() -> bool:
+    return BROWSER_CHANNEL == "chrome"
 
 
 async def _stealth_context_options(
     browser: Browser, payload: RenderRequest
 ) -> dict[str, object]:
+    """Normalize headless Chromium UA only. Skip when using channel=chrome."""
     if (
-        payload.network.user_agent is not None
+        _uses_chrome_channel()
+        or not HEADLESS
+        or payload.network.user_agent is not None
         or payload.environment.device is not DevicePreset.DESKTOP
         or payload.engine is not BrowserEngine.CHROMIUM
     ):
@@ -408,24 +386,21 @@ async def _launch_browser(
     engine: BrowserEngine = BrowserEngine.CHROMIUM,
 ) -> Browser:
     selected_mode = gpu_mode or GPU_MODE
-    browser_type = getattr(playwright, engine.value)
-    launch_options = {
-        "headless": True,
-        "args": (
-            gpu_launch_args(selected_mode)
-            if engine.value == BrowserEngine.CHROMIUM.value
-            else []
-        ),
-    }
-    if engine.value == BrowserEngine.CHROMIUM.value:
-        launch_options.update(
-            channel="chromium",
-            env={
-                **os.environ,
-                "XDG_CACHE_HOME": "/tmp/chromium-cache",
-                "XDG_CONFIG_HOME": "/tmp/chromium-config",
-            },
+    if engine is not BrowserEngine.CHROMIUM:
+        raise RuntimeError(
+            f"ViperCapture Stealth is Chromium-only; {engine.value} is not supported."
         )
+    browser_type = playwright.chromium
+    launch_options: dict[str, object] = {
+        "headless": HEADLESS,
+        "args": gpu_launch_args(selected_mode),
+        "channel": BROWSER_CHANNEL,
+        "env": {
+            **os.environ,
+            "XDG_CACHE_HOME": "/tmp/chromium-cache",
+            "XDG_CONFIG_HOME": "/tmp/chromium-config",
+        },
+    }
     browser = await browser_type.launch(
         **launch_options,
     )
@@ -949,7 +924,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="ViperCapture",
+    title="ViperCapture Stealth",
     version=APP_VERSION,
     lifespan=lifespan,
 )
@@ -1713,7 +1688,6 @@ def _render_engine() -> RenderEngine:
         ),
         challenge_checker=_check_captcha,
         stealth_context_options=_stealth_context_options,
-        stealth_applier=_apply_stealth,
         browser_replacer=lambda failed: _replace_browser(app, failed),
         device_descriptors=(
             dict(playwright.devices) if playwright is not None else None

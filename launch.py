@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-ViperCapture launcher
----------------------
+ViperCapture Stealth launcher
+-----------------------------
 Run this file directly with Python.
-Handles venv setup, dependency install, browser install,
+Handles venv setup, dependency install, Patchright Chromium install,
 server startup, and opening your browser automatically.
 
 Prefers uv (https://docs.astral.sh/uv/) when it is on PATH.
@@ -32,7 +32,25 @@ HOST             = "127.0.0.1"
 PORT             = 8000
 URL              = f"http://{HOST}:{PORT}/"
 DEPS_STAMP       = ROOT / ".venv" / ".deps_stamp"
-PLAYWRIGHT_STAMP = ROOT / ".venv" / ".playwright_stamp"
+PATCHRIGHT_STAMP = ROOT / ".venv" / ".patchright_stamp"
+
+
+def browser_install_targets() -> list[str]:
+    """Install Chrome when requested; otherwise bundled Chromium."""
+    channel = os.environ.get("VIPERCAPTURE_BROWSER_CHANNEL", "chromium").strip().lower()
+    if channel == "chrome":
+        return ["chrome"]
+    return ["chromium"]
+
+
+def patchright_install_command(python: str, *, with_deps: bool | None = None) -> list[str]:
+    command = [python, "-m", "patchright", "install"]
+    if with_deps is None:
+        with_deps = sys.platform.startswith("linux")
+    if with_deps:
+        command.append("--with-deps")
+    command.extend(browser_install_targets())
+    return command
 
 
 # ── Helpers ───────────────────────────────────────────────────
@@ -153,38 +171,37 @@ def ensure_deps() -> None:
     DEPS_STAMP.write_text(current_hash)
 
 
-def ensure_playwright() -> None:
+def ensure_patchright() -> None:
     """
-    Install Playwright's Chromium, Firefox, and WebKit browsers.
-    Skipped when the installed browser matches the Playwright package version.
+    Install Patchright's Chromium (or Chrome when VIPERCAPTURE_BROWSER_CHANNEL=chrome).
+    Skipped when the installed browser matches the Patchright package version.
     """
-    playwright_stamp = f"{version('playwright')}:chromium,firefox,webkit"
+    targets = ",".join(browser_install_targets())
+    patchright_stamp = f"{version('patchright')}:{targets}"
     if (
-        PLAYWRIGHT_STAMP.exists()
-        and PLAYWRIGHT_STAMP.read_text().strip() == playwright_stamp
+        PATCHRIGHT_STAMP.exists()
+        and PATCHRIGHT_STAMP.read_text().strip() == patchright_stamp
     ):
-        print("  [3/3] Playwright browsers already installed — skipping.")
+        print("  [3/3] Patchright browsers already installed — skipping.")
         return
 
-    print("  [3/3] Installing Playwright browsers...")
-    command = [sys.executable, "-m", "playwright", "install", "--no-shell"]
-    if sys.platform.startswith("linux"):
-        command.append("--with-deps")
-    run(*command, "chromium", "firefox", "webkit", label="playwright install")
-    PLAYWRIGHT_STAMP.write_text(playwright_stamp)
+    print(f"  [3/3] Installing Patchright browsers ({targets})...")
+    command = patchright_install_command(sys.executable)
+    run(*command, label="patchright install")
+    PATCHRIGHT_STAMP.write_text(patchright_stamp)
 
 
 # ── Main ──────────────────────────────────────────────────────
 
 def main() -> None:
     print()
-    print("  ViperCapture")
-    print("  ------------")
+    print("  ViperCapture Stealth")
+    print("  --------------------")
     print()
 
     ensure_venv()    # may re-exec this script under the venv Python
     ensure_deps()
-    ensure_playwright()
+    ensure_patchright()
 
     # Server already running from a previous session?
     if port_open():

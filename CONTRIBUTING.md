@@ -1,7 +1,11 @@
-# Contributing to ViperCapture
+# Contributing to ViperCapture Stealth
 
 This guide explains how to submit focused fixes, documentation updates, and
-small features to the open-source rendering engine.
+small features to the stealth fork of the open-source rendering engine.
+
+This repository is **ViperCapture-Stealth**, a Patchright Chromium fork of
+[ViperCapture](https://github.com/Viperisuseful/ViperCapture). Do not open
+pull requests against the main OSS repo for stealth-only changes.
 
 ## Scope
 
@@ -20,16 +24,18 @@ installer
 ([installation guide](https://docs.astral.sh/uv/getting-started/installation/)):
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/ViperCapture.git
-cd ViperCapture
+git clone https://github.com/YOUR_USERNAME/ViperCapture-Stealth.git
+cd ViperCapture-Stealth
 python launch.py
 ```
 
 `python launch.py` is the supported setup and startup method. It prefers uv
 when uv is on `PATH` to create `.venv` and install from `requirements.txt`,
-then installs Chromium, Firefox, and WebKit and starts the app. Without uv it
-falls back to `python -m venv` and pip. Set `VIPERCAPTURE_USE_UV=0` to force
-the pip path. Existing pip-only workflows stay valid:
+then installs Patchright Chromium (`python -m patchright install chromium`)
+and starts the app. Set `VIPERCAPTURE_BROWSER_CHANNEL=chrome` to install
+Google Chrome instead. Without uv it falls back to `python -m venv` and pip.
+Set `VIPERCAPTURE_USE_UV=0` to force the pip path. Existing pip-only
+workflows stay valid:
 
 ```bash
 python -m venv .venv
@@ -50,12 +56,14 @@ Preserve the public engine's main security boundaries: public HTTP(S) targets
 only, redirect and DNS checks, same-origin routing for custom headers, strict
 request validation, and bounded browser work. Never commit secrets, cookies,
 private URLs, generated captures, virtual environments, or browser binaries.
+Do not add custom Cloudflare exploits, CAPTCHA solvers, or stack
+`playwright-stealth` on top of Patchright.
 
 The main files are:
 
 - `vipercapture/main.py` — FastAPI application and local interface
 - `vipercapture/render_contract.py` — request validation
-- `vipercapture/render_engine.py` — Playwright rendering and network controls
+- `vipercapture/render_engine.py` — Patchright Chromium rendering and network controls
 - `vipercapture/render_errors.py` — stable API errors
 - `vipercapture/async_jobs.py` — provider-neutral queue contracts and worker lifecycle
 - `vipercapture/async_job_providers.py` — bundled SQLite and filesystem adapters
@@ -63,18 +71,18 @@ The main files are:
 
 ## Check a change
 
-Build the frontend and run the cross-browser smoke check before submitting:
+Build the frontend and run the Chromium smoke check before submitting:
 
 ```bash
 npm ci --prefix frontend
 npm run lint --prefix frontend
 npm run build --prefix frontend
-.venv/bin/python -m playwright install --with-deps chromium firefox webkit
+.venv/bin/python -m patchright install --with-deps chromium
 .venv/bin/python scripts/smoke.py
 ```
 
 On Windows, use `.venv\Scripts\python`, omit `--with-deps`, and run the same
-Playwright and smoke commands. Keep checks deterministic and avoid relying on
+Patchright and smoke commands. Keep checks deterministic and avoid relying on
 live third-party websites.
 
 By submitting a contribution, you agree that it is licensed under the
