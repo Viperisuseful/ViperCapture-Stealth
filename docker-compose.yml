@@ -1,6 +1,6 @@
 services:
   vipercapture:
-    image: ghcr.io/viperisuseful/vipercapture-stealth:1.0.3
+    image: ghcr.io/viperisuseful/vipercapture-stealth:0.1.0-beta
     build: .
     init: true
     ports:

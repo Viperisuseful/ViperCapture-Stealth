@@ -4,21 +4,30 @@
 
 <h1 align="center">ViperCapture Stealth</h1>
 
-<p align="center"><strong>Stealth fork of ViperCapture, powered by Patchright.</strong></p>
+<p align="center"><strong>ViperCapture Stealth 0.1.0-beta — first public beta.</strong></p>
 
-This is the **stealth fork** of [ViperCapture](https://github.com/Viperisuseful/ViperCapture)
+This is the **first public beta** of [ViperCapture Stealth](https://github.com/Viperisuseful/ViperCapture-Stealth),
+the stealth fork of [ViperCapture](https://github.com/Viperisuseful/ViperCapture)
 (OSS 1.0.3). It keeps the same `/v1/render` JSON contract and logo assets, but
 replaces Playwright with [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-python),
 a Chromium-only Playwright drop-in that patches CDP leaks used by Cloudflare
 and other WAFs.
 
-- Upstream OSS: https://github.com/Viperisuseful/ViperCapture
+- Upstream OSS: https://github.com/Viperisuseful/ViperCapture (1.0.3 contract)
 - This fork: https://github.com/Viperisuseful/ViperCapture-Stealth
-- Published image: `ghcr.io/viperisuseful/vipercapture-stealth`
+- Product version: **0.1.0-beta** (tag `v0.1.0-beta`)
+- Published image: `ghcr.io/viperisuseful/vipercapture-stealth:0.1.0-beta`
 
-The product version stays **1.0.3** to match the upstream contract line. Fork
-identity lives in the product name, image, and this README—not a confusing
-version scheme.
+## What’s in 0.1.0-beta
+
+- **Patchright swap** — Playwright is replaced by Patchright Chromium
+- **Persistent / sweet-spot** — headed persistent Chrome when a workstation
+  display is available; Docker/GHCR stay headless bundled Chromium
+- **Turnstile click path** — complete-when-possible via locators/frames (#5)
+  plus the `stop_when` bind fix (#6)
+- **Chromium-only** — Firefox and WebKit requests are rejected
+
+This is a prerelease. It is **not** a Cloudflare bypass.
 
 ViperCapture Stealth is an MIT-licensed browser renderer for infrastructure
 you control. Send a URL, HTML, or Markdown and receive screenshots, PDFs,
@@ -182,7 +191,7 @@ docker compose up --build
 Stable container images are also published to GitHub Container Registry:
 
 ```bash
-docker pull ghcr.io/viperisuseful/vipercapture-stealth:1.0.3
+docker pull ghcr.io/viperisuseful/vipercapture-stealth:0.1.0-beta
 ```
 
 The image defaults to headless bundled Chromium. That is weaker than headed
