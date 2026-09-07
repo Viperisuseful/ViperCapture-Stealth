@@ -1,8 +1,10 @@
 """Challenge detection, Turnstile checkbox clicks, and an operator CAPTCHA hook.
 
-Cloudflare Turnstile handling clicks the visible checkbox through Patchright
-frames/locators and waits for the interstitial to clear. It does not call
-solver APIs, mint tokens, or use undocumented Cloudflare endpoints.
+Cloudflare Turnstile handling clicks a reachable checkbox through Patchright
+frames/locators (including closed-shadow locators) with a human-like mouse
+path, waits for a managed auto-pass, and retries with backoff. It does not
+call solver APIs, mint tokens, or use undocumented Cloudflare endpoints.
+Interactive Turnstile can still remain after an honest click.
 """
 
 from __future__ import annotations
@@ -11,13 +13,34 @@ import asyncio
 import importlib
 import inspect
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, AsyncContextManager
 
 from .browser_launch import turnstile_click_enabled, turnstile_timeout_ms
 from .render_errors import RenderError
 
 CaptchaHandler = Callable[[Any, dict[str, object], str | None, int], Awaitable[bool]]
+
+# Managed Cloudflare pages use "Just a moment..." as the document title.
+CHALLENGE_PHRASES: tuple[str, ...] = (
+    "checking your browser",
+    "just a moment",
+    "verify you are human",
+    "verification required",
+    "complete the security check",
+    "performing security verification",
+    "needs to review the security of your connection",
+    "checking if the site connection is secure",
+    "enable javascript and cookies",
+    "unusual traffic",
+    "attention required",
+    "security challenge",
+    "prove you are human",
+    "confirm you are human",
+    "bot verification",
+    "press and hold",
+    "slide to verify",
+)
 
 DETECT_CHALLENGE_SCRIPT = r"""({ status }) => {
     const visible = (element) => {
@@ -45,9 +68,12 @@ DETECT_CHALLENGE_SCRIPT = r"""({ status }) => {
         roots.flatMap((root) => [...root.querySelectorAll(selector)]).filter(visible));
     const providers = {
         cloudflare: {
-            widgets: [".cf-turnstile", "iframe[src*='challenges.cloudflare.com']"],
+            widgets: [".cf-turnstile", "iframe[src*='challenges.cloudflare.com']",
+                "iframe[src*='turnstile']", "iframe[name^='cf-chl-widget']",
+                "iframe[id^='cf-chl-widget']", "input[name='cf-turnstile-response']"],
             blocking: ["#challenge-stage", "#challenge-running", "#challenge-form",
-                "iframe[src*='/cdn-cgi/challenge-platform/']"]
+                "#cf-challenge-running", "#cf-please-wait", ".cf-browser-verification",
+                "#challenge-error-title", "iframe[src*='/cdn-cgi/challenge-platform/']"]
         },
         recaptcha: {
             widgets: [".g-recaptcha", "[data-sitekey][data-callback]",
@@ -96,14 +122,20 @@ DETECT_CHALLENGE_SCRIPT = r"""({ status }) => {
     const title = (document.title || "").toLowerCase();
     const bodyText = (document.body?.innerText || "").slice(0, 30000).toLowerCase();
     const challengePhrases = [
-        "checking your browser", "verify you are human", "verification required",
-        "complete the security check", "performing security verification",
-        "unusual traffic", "attention required", "security challenge",
-        "prove you are human", "confirm you are human", "bot verification",
-        "press and hold", "slide to verify"
+        "checking your browser", "just a moment", "verify you are human",
+        "verification required", "complete the security check",
+        "performing security verification",
+        "needs to review the security of your connection",
+        "checking if the site connection is secure",
+        "enable javascript and cookies", "unusual traffic", "attention required",
+        "security challenge", "prove you are human", "confirm you are human",
+        "bot verification", "press and hold", "slide to verify"
     ];
     const challengeText = challengePhrases.some((phrase) => title.includes(phrase)) ||
         (bodyText.length <= 5000 && challengePhrases.some((phrase) => bodyText.includes(phrase)));
+    const cfManaged = typeof window._cf_chl_opt !== "undefined" ||
+        Boolean(document.querySelector("script[src*='cdn-cgi/challenge-platform']")) ||
+        Boolean(document.querySelector("script[src*='challenges.cloudflare.com']"));
     const signals = [];
     let widgetMatch = null;
     let blockingMatch = null;
@@ -121,23 +153,43 @@ DETECT_CHALLENGE_SCRIPT = r"""({ status }) => {
         if (!widgetMatch) widgetMatch = match;
     }
     const match = blockingMatch || widgetMatch;
-    const provider = match?.name || null;
+    let provider = match?.name || null;
     const elements = match?.elements || [];
     const hasBlockingElement = Boolean(match?.blocking.length);
     const hasObstruction = Boolean(match?.obstructed);
     if (match?.widgets.length) signals.push("provider_widget");
     if (hasBlockingElement) signals.push("challenge_form");
     if (hasObstruction) signals.push("viewport_obstruction");
+    if (cfManaged) {
+        signals.push("cf_challenge_script");
+        if (!provider) provider = "cloudflare";
+    }
     if (status === 429) signals.push("main_response_429");
     else if ([401, 403, 503].includes(status)) signals.push(`main_response_${status}`);
     if (challengeText) signals.push("challenge_copy");
     const current = location.href.toLowerCase();
-    const challengeUrl = /captcha|challenge|verify/.test(current);
+    const challengeUrl = /captcha|challenge|verify|cdn-cgi/.test(current);
     if (challengeUrl) signals.push("challenge_url");
+    const passPhrases = ["you bypassed", "you have been verified", "verification successful"];
+    const passCopy = passPhrases.some((phrase) => title.includes(phrase)) ||
+        passPhrases.some((phrase) => bodyText.includes(phrase));
+    const tokenSelectors = ["input[name='cf-turnstile-response']",
+        "textarea[name='cf-turnstile-response']"];
+    const tokenFields = tokenSelectors.flatMap((selector) =>
+        roots.flatMap((root) => [...root.querySelectorAll(selector)]));
+    const hasToken = tokenFields.some((element) => String(element.value || "").trim().length > 0);
+    const successUi = query(["#challenge-success", ".cf-turnstile[data-state='success']"]).length > 0;
+    if (hasToken) signals.push("turnstile_token");
+    if (passCopy) signals.push("bypass_copy");
+    if (successUi) signals.push("challenge_success");
+    // Stale navigation 403 must not keep a passed page uncleared.
+    if (hasToken || passCopy || successUi) {
+        return {provider: "cloudflare", kind: "passed", confidence: 1, signals};
+    }
 
     let kind = null;
     const blockingSignal = hasBlockingElement || hasObstruction || challengeText ||
-        (challengeUrl && [401, 403, 429, 503].includes(status));
+        cfManaged || (challengeUrl && [401, 403, 429, 503].includes(status));
     if (status === 429 && blockingSignal) kind = "rate_limited";
     else if ([401, 403, 503].includes(status) && blockingSignal) kind = "access_denied";
     else if (blockingSignal) kind = "blocking_interstitial";
@@ -179,16 +231,15 @@ def load_captcha_handler(spec: str) -> CaptchaHandler | None:
     return handler
 
 
-async def detect_challenge(
-    page: Any, navigation_status: int | None
-) -> dict[str, object] | None:
-    return await page.evaluate(DETECT_CHALLENGE_SCRIPT, {"status": navigation_status})
-
-
 TURNSTILE_FRAME_SELECTORS = (
     "iframe[src*='challenges.cloudflare.com']",
     "iframe[src*='/cdn-cgi/challenge-platform/']",
+    "iframe[src*='turnstile']",
     "iframe[title*='Cloudflare' i]",
+    "iframe[title*='security challenge' i]",
+    "iframe[name^='cf-chl-widget']",
+    "iframe[id^='cf-chl-widget']",
+    "iframe[src*='cf-chl-widget']",
     ".cf-turnstile iframe",
 )
 TURNSTILE_HOST_SELECTORS = (
@@ -196,27 +247,90 @@ TURNSTILE_HOST_SELECTORS = (
     "#challenge-stage",
     "#challenge-form",
     "#challenge-running",
+    "#cf-challenge-running",
+    "#cf-please-wait",
+    ".cf-browser-verification",
+)
+TURNSTILE_BLOCKING_HOST_SELECTORS = (
+    "#challenge-stage",
+    "#challenge-form",
+    "#challenge-running",
+    "#cf-challenge-running",
+    "#cf-please-wait",
+    ".cf-browser-verification",
+    "#challenge-error-title",
 )
 TURNSTILE_CHECKBOX_SELECTORS = (
     "input[type='checkbox']",
     "[role='checkbox']",
+    "span[role='checkbox']",
+    "div[role='checkbox']",
     "label",
     ".mark",
-    "body",
+    "#cf-stage",
 )
+TURNSTILE_PASS_SIGNALS = frozenset(
+    {"turnstile_token", "bypass_copy", "challenge_success"}
+)
+PASS_PHRASES: tuple[str, ...] = (
+    "you bypassed",
+    "you have been verified",
+    "verification successful",
+)
+# Checkbox sits near the left-center of a typical 300x65 Turnstile widget.
+TURNSTILE_CHECKBOX_POSITION = {"x": 28, "y": 32}
 POST_PASS_SETTLE_MS = 750
-AUTO_PASS_POLL_S = 3.0
+AUTO_PASS_POLL_S = 8.0
 CLICK_TIMEOUT_MS = 2_500
+VISIBILITY_TIMEOUT_MS = 350
+MAX_CLICK_ATTEMPTS = 3
+CLICK_BACKOFF_MS = (400, 800, 1_600)
+MOUSE_MOVE_STEPS = 12
+CLICK_DELAY_MS = 70
+POLL_S = 0.25
 
 
 def challenge_is_blocking(challenge: dict[str, object] | None) -> bool:
     if not challenge:
         return False
-    return str(challenge.get("kind") or "") != "embedded_widget"
+    kind = str(challenge.get("kind") or "")
+    return kind not in {"embedded_widget", "passed"}
 
 
 def is_cloudflare_challenge(challenge: dict[str, object] | None) -> bool:
-    return bool(challenge) and str(challenge.get("provider") or "") == "cloudflare"
+    """True for CF provider or locator/frame Turnstile hits (evaluate can be blind)."""
+    if not challenge:
+        return False
+    if str(challenge.get("provider") or "") == "cloudflare":
+        return True
+    signals = {str(item) for item in (challenge.get("signals") or [])}
+    return bool(
+        signals
+        & {
+            "locator_widget",
+            "locator_challenge_form",
+            "turnstile_frame",
+            "cf_challenge_script",
+        }
+    )
+
+
+def challenge_cleared(challenge: dict[str, object] | None) -> bool:
+    """Turnstile is cleared only when gone or a token/bypass/success signal exists.
+
+    ``embedded_widget`` is not a pass: nowsecure's visible checkbox is an
+    embedded widget, and treating it as cleared skipped the click.
+    """
+    if not challenge:
+        return True
+    if str(challenge.get("kind") or "") == "passed":
+        return True
+    signals = {str(item) for item in (challenge.get("signals") or [])}
+    if signals & TURNSTILE_PASS_SIGNALS:
+        return True
+    if is_cloudflare_challenge(challenge):
+        return False
+    return not challenge_is_blocking(challenge)
 
 
 def _remaining_timeout_ms(deadline: float | None) -> int | None:
@@ -225,12 +339,127 @@ def _remaining_timeout_ms(deadline: float | None) -> int | None:
     return max(0, int((deadline - time.monotonic()) * 1_000))
 
 
-async def _click_locator(
+def click_retry_wait_ms(attempt: int, remaining_ms: int) -> int:
+    """Backoff before the next Turnstile click, capped by the remaining budget."""
+    if remaining_ms <= 0:
+        return 0
+    index = min(max(0, attempt), len(CLICK_BACKOFF_MS) - 1)
+    return min(CLICK_BACKOFF_MS[index], remaining_ms)
+
+
+def post_click_wait_ms(remaining_ms: int, attempts_left: int, clicked: bool) -> int:
+    """Share leftover time across this wait and any later click attempts."""
+    if remaining_ms <= 0:
+        return 0
+    if not clicked:
+        return min(2_000, remaining_ms)
+    slots = max(1, attempts_left + 1)
+    return max(1, remaining_ms // slots)
+
+
+def auto_pass_wait_ms(budget_ms: int) -> int:
+    """Spend up to AUTO_PASS_POLL_S, but leave room for at least one click+wait."""
+    reserved = CLICK_TIMEOUT_MS + CLICK_BACKOFF_MS[0]
+    if budget_ms <= reserved:
+        return 0
+    return min(int(AUTO_PASS_POLL_S * 1_000), budget_ms - reserved)
+
+
+async def _call_maybe_await(value: Any) -> Any:
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+async def _locator_is_visible(locator: Any, timeout_ms: int) -> bool | None:
+    """True/False when the locator can report visibility; None if it cannot."""
+    if locator is None:
+        return False
+    is_visible = getattr(locator, "is_visible", None)
+    if callable(is_visible):
+        try:
+            return bool(await _call_maybe_await(is_visible(timeout=max(0, timeout_ms))))
+        except TypeError:
+            try:
+                return bool(await _call_maybe_await(is_visible()))
+            except Exception:
+                return None
+        except Exception:
+            return False
+    count = getattr(locator, "count", None)
+    if callable(count):
+        try:
+            found = await _call_maybe_await(count())
+            return int(found or 0) > 0
+        except Exception:
+            return False
+    return None
+
+
+def _first_locator(target: Any) -> Any:
+    return getattr(target, "first", target)
+
+
+def _supported_kwargs(func: Callable[..., Any], kwargs: dict[str, Any]) -> dict[str, Any]:
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return dict(kwargs)
+    if any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    ):
+        return dict(kwargs)
+    return {
+        key: value
+        for key, value in kwargs.items()
+        if key in signature.parameters
+    }
+
+
+async def _invoke_with_supported_kwargs(func: Callable[..., Any], **kwargs: Any) -> Any:
+    selected = _supported_kwargs(func, kwargs)
+    try:
+        return await _call_maybe_await(func(**selected))
+    except TypeError:
+        return await _call_maybe_await(func())
+
+
+def _mouse_from_locator(locator: Any) -> Any | None:
+    page = getattr(locator, "page", None) or getattr(locator, "_page", None)
+    if page is None:
+        return None
+    mouse = getattr(page, "mouse", None)
+    return mouse if mouse is not None else None
+
+
+async def _mouse_click_at(mouse: Any, x: float, y: float) -> bool:
+    move = getattr(mouse, "move", None)
+    click_mouse = getattr(mouse, "click", None)
+    if not callable(move) or not callable(click_mouse):
+        return False
+    try:
+        try:
+            await _call_maybe_await(move(x, y, steps=MOUSE_MOVE_STEPS))
+        except TypeError:
+            await _call_maybe_await(move(x, y))
+        try:
+            await _call_maybe_await(click_mouse(x, y, delay=CLICK_DELAY_MS))
+        except TypeError:
+            await _call_maybe_await(click_mouse(x, y))
+        return True
+    except Exception:
+        return False
+
+
+async def _human_click_locator(
     locator: Any,
     timeout_ms: int = CLICK_TIMEOUT_MS,
     *,
     deadline: float | None = None,
+    position: dict[str, float] | None = None,
 ) -> bool:
+    """Hover/mousemove then click when the APIs exist; never forges tokens."""
     if locator is None:
         return False
     remaining = _remaining_timeout_ms(deadline)
@@ -238,14 +467,91 @@ async def _click_locator(
         if remaining <= 0:
             return False
         timeout_ms = min(timeout_ms, remaining)
+    visible = await _locator_is_visible(
+        locator, timeout_ms=min(VISIBILITY_TIMEOUT_MS, timeout_ms)
+    )
+    if visible is False:
+        return False
+
+    scroll = getattr(locator, "scroll_into_view_if_needed", None)
+    if callable(scroll):
+        try:
+            await _invoke_with_supported_kwargs(scroll, timeout=timeout_ms)
+        except Exception:
+            pass
+
+    box_fn = getattr(locator, "bounding_box", None)
+    mouse = _mouse_from_locator(locator)
+    if callable(box_fn) and mouse is not None:
+        try:
+            box = await _call_maybe_await(box_fn())
+        except Exception:
+            box = None
+        if isinstance(box, dict) and box.get("width") and box.get("height"):
+            x = float(box["x"]) + float(box["width"]) * 0.5
+            y = float(box["y"]) + float(box["height"]) * 0.5
+            if position:
+                x = float(box["x"]) + min(
+                    float(position.get("x", 0)), max(1.0, float(box["width"]) - 1)
+                )
+                y = float(box["y"]) + min(
+                    float(position.get("y", 0)), max(1.0, float(box["height"]) - 1)
+                )
+            if await _mouse_click_at(mouse, x, y):
+                return True
+
+    hover = getattr(locator, "hover", None)
+    if callable(hover):
+        try:
+            await _invoke_with_supported_kwargs(hover, timeout=timeout_ms)
+        except Exception:
+            pass
+
     click = getattr(locator, "click", None)
     if not callable(click):
         return False
+    click_kwargs: dict[str, Any] = {
+        "timeout": timeout_ms,
+        "delay": CLICK_DELAY_MS,
+    }
+    if position:
+        click_kwargs["position"] = position
     try:
-        await click(timeout=timeout_ms)
+        await _invoke_with_supported_kwargs(click, **click_kwargs)
         return True
     except Exception:
         return False
+
+
+async def _click_locator(
+    locator: Any,
+    timeout_ms: int = CLICK_TIMEOUT_MS,
+    *,
+    deadline: float | None = None,
+    position: dict[str, float] | None = None,
+) -> bool:
+    return await _human_click_locator(
+        locator, timeout_ms, deadline=deadline, position=position
+    )
+
+
+def _turnstile_native_frames(page: Any) -> list[Any]:
+    """Playwright ``page.frames`` can see closed-shadow CF iframes evaluate cannot."""
+    matched: list[Any] = []
+    for frame in list(getattr(page, "frames", None) or []):
+        url = str(getattr(frame, "url", "") or "").lower()
+        name = str(getattr(frame, "name", "") or "").lower()
+        frame_id = str(getattr(frame, "name", "") or getattr(frame, "url", "") or "")
+        if (
+            "challenges.cloudflare.com" in url
+            or "cdn-cgi/challenge-platform" in url
+            or "turnstile" in url
+            or "cf-chl-widget" in url
+            or name.startswith("cf-chl-widget")
+            or "cf-chl-widget" in frame_id.lower()
+        ):
+            matched.append(frame)
+    return matched
 
 
 def _frame_candidates(page: Any) -> list[Any]:
@@ -257,11 +563,35 @@ def _frame_candidates(page: Any) -> list[Any]:
                 frames.append(frame_locator(selector))
             except Exception:
                 continue
-    for frame in list(getattr(page, "frames", None) or []):
-        url = str(getattr(frame, "url", "") or "").lower()
-        if "challenges.cloudflare.com" in url or "cdn-cgi/challenge-platform" in url:
-            frames.append(frame)
+    frames.extend(_turnstile_native_frames(page))
     return frames
+
+
+async def _click_checkbox_on(
+    frame: Any,
+    *,
+    deadline: float | None,
+) -> bool:
+    get_by_role = getattr(frame, "get_by_role", None)
+    if callable(get_by_role):
+        try:
+            checkbox = get_by_role("checkbox")
+        except Exception:
+            checkbox = None
+        if await _click_locator(_first_locator(checkbox), deadline=deadline):
+            return True
+    locator_factory = getattr(frame, "locator", None)
+    if callable(locator_factory):
+        for selector in TURNSTILE_CHECKBOX_SELECTORS:
+            if deadline is not None and (_remaining_timeout_ms(deadline) or 0) <= 0:
+                return False
+            try:
+                target = _first_locator(locator_factory(selector))
+            except Exception:
+                continue
+            if await _click_locator(target, deadline=deadline):
+                return True
+    return False
 
 
 async def click_turnstile_widget(
@@ -269,7 +599,11 @@ async def click_turnstile_widget(
     *,
     timeout_ms: int | None = None,
 ) -> bool:
-    """Click the Turnstile checkbox via frames/locators. Never forges tokens."""
+    """Click the Turnstile checkbox via frames/locators. Never forges tokens.
+
+    Patchright locators can pierce closed shadow roots; this path prefers
+    ``get_by_role('checkbox')`` and frame locators, then host widgets.
+    """
     deadline = (
         time.monotonic() + max(0, timeout_ms) / 1_000 if timeout_ms is not None else None
     )
@@ -278,43 +612,129 @@ async def click_turnstile_widget(
     for frame in _frame_candidates(page):
         if deadline is not None and (_remaining_timeout_ms(deadline) or 0) <= 0:
             return False
-        get_by_role = getattr(frame, "get_by_role", None)
-        if callable(get_by_role):
-            try:
-                checkbox = get_by_role("checkbox")
-            except Exception:
-                checkbox = None
-            if await _click_locator(checkbox, deadline=deadline):
-                return True
-        locator_factory = getattr(frame, "locator", None)
-        if callable(locator_factory):
-            for selector in TURNSTILE_CHECKBOX_SELECTORS:
-                if deadline is not None and (_remaining_timeout_ms(deadline) or 0) <= 0:
-                    return False
-                try:
-                    target = locator_factory(selector)
-                    first = getattr(target, "first", target)
-                except Exception:
-                    continue
-                if await _click_locator(first, deadline=deadline):
-                    return True
+        if await _click_checkbox_on(frame, deadline=deadline):
+            return True
+
+    # Closed-shadow widgets on the page itself (Patchright locator pierce).
+    if await _click_checkbox_on(page, deadline=deadline):
+        return True
+
     locator_factory = getattr(page, "locator", None)
     if callable(locator_factory):
         for selector in (*TURNSTILE_HOST_SELECTORS, *TURNSTILE_FRAME_SELECTORS):
             if deadline is not None and (_remaining_timeout_ms(deadline) or 0) <= 0:
                 return False
             try:
-                target = locator_factory(selector)
-                first = getattr(target, "first", target)
+                target = _first_locator(locator_factory(selector))
             except Exception:
                 continue
-            if await _click_locator(first, deadline=deadline):
+            iframe_like = "iframe" in selector
+            position = TURNSTILE_CHECKBOX_POSITION if iframe_like else None
+            if await _click_locator(target, deadline=deadline, position=position):
                 return True
     return False
 
 
-def challenge_cleared(challenge: dict[str, object] | None) -> bool:
-    return challenge is None or not challenge_is_blocking(challenge)
+async def _locator_selector_hit(
+    page: Any, selectors: Sequence[str], *, timeout_ms: int = VISIBILITY_TIMEOUT_MS
+) -> bool:
+    locator_factory = getattr(page, "locator", None)
+    if not callable(locator_factory):
+        return False
+    for selector in selectors:
+        try:
+            target = _first_locator(locator_factory(selector))
+        except Exception:
+            continue
+        visible = await _locator_is_visible(target, timeout_ms=timeout_ms)
+        if visible is True:
+            return True
+    return False
+
+
+async def locator_cloudflare_challenge(page: Any) -> dict[str, object] | None:
+    """Detect Cloudflare widgets Patchright locators/frames can see (closed shadow)."""
+    blocking = await _locator_selector_hit(page, TURNSTILE_BLOCKING_HOST_SELECTORS)
+    widget = await _locator_selector_hit(
+        page, (*TURNSTILE_HOST_SELECTORS, *TURNSTILE_FRAME_SELECTORS)
+    )
+    frame_hit = bool(_turnstile_native_frames(page))
+    if not blocking and not widget and not frame_hit:
+        return None
+    # scrapingcourse: evaluate sees iframes=0 / provider=unknown, but frames exist.
+    # Treat a native Turnstile frame as blocking so the click path runs.
+    if blocking or frame_hit:
+        kind = "blocking_interstitial"
+    else:
+        kind = "embedded_widget"
+    signals = ["locator_widget"]
+    if blocking:
+        signals.append("locator_challenge_form")
+    if frame_hit:
+        signals.append("turnstile_frame")
+    return {
+        "provider": "cloudflare",
+        "kind": kind,
+        "confidence": 0.9 if kind == "blocking_interstitial" else 0.72,
+        "signals": signals,
+    }
+
+
+def merge_challenge_signals(
+    evaluated: dict[str, object] | None,
+    locator_hit: dict[str, object] | None,
+) -> dict[str, object] | None:
+    """Combine in-page JS detection with Patchright locator/frame hits."""
+    if not evaluated and not locator_hit:
+        return None
+    if evaluated and (
+        str(evaluated.get("kind") or "") == "passed"
+        or TURNSTILE_PASS_SIGNALS.intersection(
+            str(item) for item in (evaluated.get("signals") or [])
+        )
+    ):
+        return None
+    if not evaluated:
+        return dict(locator_hit or {})
+    merged = dict(evaluated)
+    if not locator_hit:
+        return merged
+    signals = list(merged.get("signals") or [])
+    for signal in locator_hit.get("signals") or []:
+        if signal not in signals:
+            signals.append(str(signal))
+    merged["signals"] = signals
+    if not merged.get("provider") or merged.get("provider") == "unknown":
+        merged["provider"] = locator_hit.get("provider") or "cloudflare"
+        merged["confidence"] = max(
+            float(merged.get("confidence") or 0),
+            float(locator_hit.get("confidence") or 0),
+        )
+    if not challenge_is_blocking(merged) and challenge_is_blocking(locator_hit):
+        merged["kind"] = locator_hit.get("kind")
+        merged["confidence"] = max(
+            float(merged.get("confidence") or 0),
+            float(locator_hit.get("confidence") or 0),
+        )
+    return merged
+
+
+async def detect_challenge(
+    page: Any, navigation_status: int | None
+) -> dict[str, object] | None:
+    evaluated = None
+    evaluate = getattr(page, "evaluate", None)
+    if callable(evaluate):
+        try:
+            evaluated = await evaluate(DETECT_CHALLENGE_SCRIPT, {"status": navigation_status})
+        except Exception:
+            evaluated = None
+    locator_hit = None
+    try:
+        locator_hit = await locator_cloudflare_challenge(page)
+    except Exception:
+        locator_hit = None
+    return merge_challenge_signals(evaluated, locator_hit)
 
 
 async def wait_for_challenge_clear(
@@ -322,17 +742,61 @@ async def wait_for_challenge_clear(
     *,
     timeout_ms: int,
     navigation_status: int | None,
-    poll_s: float = 0.25,
+    poll_s: float = POLL_S,
+    stop_when: Callable[[], Awaitable[bool]] | None = None,
 ) -> bool:
     deadline = time.monotonic() + max(0.0, timeout_ms / 1_000)
+    interval = max(0.05, poll_s)
+    first = True
     while True:
-        remaining = await detect_challenge(page, navigation_status)
+        status = navigation_status if first else None
+        remaining = await detect_challenge(page, status)
+        first = False
         if challenge_cleared(remaining):
             return True
+        if stop_when is not None and await stop_when():
+            return False
         remaining_s = deadline - time.monotonic()
         if remaining_s <= 0:
             return False
-        await asyncio.sleep(min(poll_s, remaining_s))
+        await asyncio.sleep(min(interval, remaining_s))
+        interval = min(1.0, interval * 1.4)
+
+
+async def _checkbox_target_available(page: Any) -> bool:
+    """Cheap probe: a checkbox or Turnstile iframe is already actionable."""
+    for frame in _frame_candidates(page):
+        get_by_role = getattr(frame, "get_by_role", None)
+        if callable(get_by_role):
+            try:
+                checkbox = _first_locator(get_by_role("checkbox"))
+            except Exception:
+                checkbox = None
+            visible = await _locator_is_visible(checkbox, timeout_ms=0)
+            if visible is True:
+                return True
+        locator_factory = getattr(frame, "locator", None)
+        if callable(locator_factory):
+            for selector in ("input[type='checkbox']", "[role='checkbox']"):
+                try:
+                    target = _first_locator(locator_factory(selector))
+                except Exception:
+                    continue
+                visible = await _locator_is_visible(target, timeout_ms=0)
+                if visible is True:
+                    return True
+    get_by_role = getattr(page, "get_by_role", None)
+    if callable(get_by_role):
+        try:
+            checkbox = _first_locator(get_by_role("checkbox"))
+        except Exception:
+            checkbox = None
+        visible = await _locator_is_visible(checkbox, timeout_ms=0)
+        if visible is True:
+            return True
+    return await _locator_selector_hit(
+        page, TURNSTILE_FRAME_SELECTORS, timeout_ms=0
+    )
 
 
 async def complete_cloudflare_turnstile(
@@ -341,10 +805,11 @@ async def complete_cloudflare_turnstile(
     timeout_ms: int,
     navigation_status: int | None = None,
 ) -> bool:
-    """Wait for a managed auto-pass, then click the checkbox and retry once.
+    """Wait for a managed auto-pass, then click with backoff retries.
 
     Interactive Turnstile (for example nowsecure.nl) may still remain after an
-    honest click. Callers must treat that as an uncleared challenge.
+    honest click. Callers must treat that as an uncleared challenge. This is
+    not a Cloudflare bypass and does not call solvers.
     """
     budget_ms = max(1_000, timeout_ms)
     deadline = time.monotonic() + budget_ms / 1_000
@@ -352,44 +817,39 @@ async def complete_cloudflare_turnstile(
     def remaining_ms() -> int:
         return max(0, int((deadline - time.monotonic()) * 1_000))
 
-    auto_pass_ms = min(int(AUTO_PASS_POLL_S * 1_000), remaining_ms())
-    if await wait_for_challenge_clear(
+    async def _settle_if_cleared() -> bool:
+        if remaining_ms() > 0:
+            await asyncio.sleep(min(POST_PASS_SETTLE_MS / 1_000, remaining_ms() / 1_000))
+        return True
+
+    auto_pass_ms = auto_pass_wait_ms(remaining_ms())
+    if auto_pass_ms > 0 and await wait_for_challenge_clear(
         page,
         timeout_ms=auto_pass_ms,
         navigation_status=navigation_status,
+        stop_when=_checkbox_target_available,
     ):
-        if remaining_ms() > 0:
-            await asyncio.sleep(min(POST_PASS_SETTLE_MS / 1_000, remaining_ms() / 1_000))
-        return True
+        return await _settle_if_cleared()
 
-    click_budget = remaining_ms()
-    if click_budget <= 0:
-        return False
-    clicked = await click_turnstile_widget(page, timeout_ms=click_budget)
-    leftover = remaining_ms()
-    first_wait = leftover // 2 if clicked else min(2_000, leftover)
-    if leftover > 0 and await wait_for_challenge_clear(
-        page,
-        timeout_ms=first_wait,
-        navigation_status=navigation_status,
-    ):
-        if remaining_ms() > 0:
-            await asyncio.sleep(min(POST_PASS_SETTLE_MS / 1_000, remaining_ms() / 1_000))
-        return True
-
-    retry_budget = remaining_ms()
-    if retry_budget <= 0:
-        return False
-    await click_turnstile_widget(page, timeout_ms=retry_budget)
-    final_wait = remaining_ms()
-    if final_wait > 0 and await wait_for_challenge_clear(
-        page,
-        timeout_ms=final_wait,
-        navigation_status=navigation_status,
-    ):
-        if remaining_ms() > 0:
-            await asyncio.sleep(min(POST_PASS_SETTLE_MS / 1_000, remaining_ms() / 1_000))
-        return True
+    attempts_left = MAX_CLICK_ATTEMPTS
+    for attempt in range(MAX_CLICK_ATTEMPTS):
+        click_budget = remaining_ms()
+        if click_budget <= 0:
+            return False
+        clicked = await click_turnstile_widget(page, timeout_ms=click_budget)
+        attempts_left -= 1
+        leftover = remaining_ms()
+        wait_ms = post_click_wait_ms(leftover, max(1, attempts_left), clicked)
+        if leftover > 0 and await wait_for_challenge_clear(
+            page,
+            timeout_ms=wait_ms,
+            navigation_status=None,
+        ):
+            return await _settle_if_cleared()
+        backoff = click_retry_wait_ms(attempt, remaining_ms())
+        if attempts_left <= 0 or backoff <= 0:
+            break
+        await asyncio.sleep(backoff / 1_000)
     return False
 
 
@@ -428,8 +888,11 @@ async def handle_challenge(
             cleared = False
         if cleared:
             return
-        challenge = await detect_challenge(page, None) or challenge
-    if not challenge or challenge.get("kind") == "embedded_widget":
+        remaining = await detect_challenge(page, None)
+        if remaining is None or challenge_cleared(remaining):
+            return
+        challenge = remaining
+    if not challenge or challenge.get("kind") in {"embedded_widget", "passed"}:
         return
     if action == "capture":
         return
@@ -465,7 +928,7 @@ async def handle_challenge(
         if cleared:
             # The handler may have navigated; the original response status is stale.
             remaining = await detect_challenge(page, None)
-            if not remaining or remaining.get("kind") == "embedded_widget":
+            if not remaining or remaining.get("kind") in {"embedded_widget", "passed"}:
                 return
             challenge = remaining
         raise RenderError(

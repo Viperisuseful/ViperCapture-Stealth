@@ -40,13 +40,16 @@ Stealth comes from **Patchright’s supported surface**, not custom exploits:
 
 This fork does **not** ship CAPTCHA solvers, Cloudflare challenge bypasses,
 token farms, or `playwright-stealth` stacked on Patchright. When a Cloudflare
-Turnstile checkbox is reachable, Stealth clicks it through Patchright
-frames/locators and waits for the interstitial to clear if it auto-passes or
-accepts that click. Interactive Turnstile (including the public nowsecure.nl
-demo) may still remain; that is an inherent challenge, not a soft auto-pass.
-Detected challenges that do not clear still return `captcha_detected` unless
-you opt into `proceed_on_captcha` (capture as shown) or an operator-approved
-external handler. For sites you administer, keep using the least-privilege
+Turnstile checkbox is reachable through Patchright frames/locators (including
+closed shadow / `cf-chl-widget-*` iframes that `page.evaluate` cannot see),
+Stealth clicks it with a human-like mouse path and waits for a token, success
+UI, or real-content bypass marker. An embedded Turnstile widget is **not**
+treated as already passed. Interactive Turnstile on many production sites can
+still remain after an honest click; that is an inherent challenge, not a
+product failure you can “bypass.” Detected challenges that do not clear still
+return `captcha_detected` unless you opt into `proceed_on_captcha` (capture as
+shown) or an operator-approved external handler. For sites you administer,
+keep using the least-privilege
 [Cloudflare/WAF authorization guide](docs/site-access.md). Do not treat this
 fork as a general Cloudflare bypass.
 
@@ -66,21 +69,18 @@ is usable without a display or system Chrome. CI stays on that path.
 | `VIPERCAPTURE_HEADLESS` | `1` | Set `0` for headed mode when a display is available. Do not force headed in Docker. |
 | `VIPERCAPTURE_PATCHRIGHT_PERSISTENT` | `0` | Opt in to `launch_persistent_context` with a durable `user_data_dir` |
 | `VIPERCAPTURE_PATCHRIGHT_NO_VIEWPORT` | off unless persistent headed Chrome | Use the real window instead of a fixed viewport |
-| `VIPERCAPTURE_PATCHRIGHT_SWEETSPOT` | `0` | Composite: persistent + headed Chrome + `no_viewport` (still overridden by explicit Docker env) |
+| `VIPERCAPTURE_PATCHRIGHT_SWEETSPOT` | auto when `DISPLAY` is set **and** not Docker; else `0` | Composite: persistent + headed Chrome + `no_viewport`. Explicit `=0` or `=1` wins. Docker/GHCR stay headless Chromium. |
 | `VIPERCAPTURE_SWIFTSHADER` | `0` | Software WebGL on GPU-less Xvfb. Does not spoof GPU fingerprints. |
 | `VIPERCAPTURE_TURNSTILE_CLICK` | `1` | Click a reachable Turnstile checkbox; disable to detect-only |
+| `VIPERCAPTURE_TURNSTILE_TIMEOUT_MS` | `30000` | Budget for auto-pass wait, checkbox click, and backoff retries |
 
-When `DISPLAY` (or `WAYLAND_DISPLAY`) is set on a workstation, the documented
-sweet spot is:
-
-```bash
-VIPERCAPTURE_BROWSER_CHANNEL=chrome
-VIPERCAPTURE_HEADLESS=0
-VIPERCAPTURE_PATCHRIGHT_PERSISTENT=1
-```
-
-That combination is **not** the Docker/GHCR default. Dockerfile pins
-`VIPERCAPTURE_HEADLESS=1` and `VIPERCAPTURE_BROWSER_CHANNEL=chromium`.
+When `DISPLAY` (or `WAYLAND_DISPLAY`) is set on a workstation **outside Docker**,
+those sweet-spot defaults apply automatically (persistent + `chrome` + headed +
+`no_viewport`). Set `VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=0` to keep headless
+bundled Chromium. Headed mode is **not** forced in Docker/GHCR: the image pins
+`VIPERCAPTURE_HEADLESS=1`, `VIPERCAPTURE_BROWSER_CHANNEL=chromium`, and
+`VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=0`. Dockerfile also pins
+`VIPERCAPTURE_PATCHRIGHT_PERSISTENT=0`.
 
 This fork is **Chromium-only**. Requests with `engine: "firefox"` or
 `"webkit"` are rejected. Firefox and WebKit are not installed.

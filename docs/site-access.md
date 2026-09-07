@@ -5,12 +5,17 @@ control. ViperCapture Stealth uses Patchright’s supported Chromium stealth
 patches (Runtime.enable avoidance, Console API disable, automation flags,
 closed shadow DOM, init-script injection via Routes). That is not a custom
 Cloudflare exploit or CAPTCHA bypass. The service detects blocking challenges
-and, for Cloudflare Turnstile, will click a reachable checkbox through
-Patchright frames/locators, wait for a managed auto-pass, and retry that click
-once. It does not call solver APIs, mint tokens, or evade another site's
-access controls. Interactive Turnstile (nowsecure.nl is a known hard demo)
-may still remain after an honest click; treat that as a challenge, not a
-product failure you can “bypass.”
+and, for Cloudflare Turnstile, clicks a reachable checkbox through Patchright
+frames/locators (including closed-shadow `cf-chl-widget-*` iframes that page
+JavaScript cannot see), uses a human-like mouse path, waits for a managed
+auto-pass, and retries with backoff. An embedded widget is not treated as
+already passed. It does not call solver APIs, mint tokens, or evade another
+site's access controls. Interactive Turnstile may still remain after an honest
+click; treat that as a challenge, not a product failure you can “bypass.”
+A public test-key widget (nowsecure.nl) can complete when the checkbox is
+actually clicked. A closed-shadow managed challenge (for example
+scrapingcourse) can complete when locators see the iframe. Neither is a
+general Cloudflare bypass.
 
 ## Create an access rule
 
@@ -92,8 +97,13 @@ rate limits and security middleware too.
   administer, remove the challenge from the authorized rule or complete it as
   a human. `proceed_on_captcha: true` captures the challenge as displayed; it
   does not mint tokens or bypass Cloudflare.
-- Interactive Turnstile on public demos such as nowsecure.nl often stays
-  unchecked after a locator click. That is an inherent interactive challenge.
+- Interactive Turnstile without a clickable checkbox still cannot complete
+  without a solver or a human. nowsecure.nl’s test-key widget can complete
+  when the checkbox is clicked; many production widgets will not. That is an
+  inherent interactive challenge, not a Stealth “bypass.”
+- A 403 from the original navigation is ignored once the page shows a Turnstile
+  token, success UI, or real-content bypass copy. Do not treat a stale 403 as
+  proof the challenge is still up.
 - For missing fonts or images, inspect the diagnostic bundle for blocked
   cross-origin assets and authorize an asset host only when you control it.
 

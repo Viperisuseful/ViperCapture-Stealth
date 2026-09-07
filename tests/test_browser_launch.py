@@ -43,18 +43,25 @@ from vipercapture.browser_launch import (  # noqa: E402
 )
 
 
+def _clear_launch_env() -> None:
+    for name in (
+        "VIPERCAPTURE_PATCHRIGHT_PERSISTENT",
+        "VIPERCAPTURE_PATCHRIGHT_SWEETSPOT",
+        "VIPERCAPTURE_BROWSER_CHANNEL",
+        "VIPERCAPTURE_HEADLESS",
+        "VIPERCAPTURE_PATCHRIGHT_NO_VIEWPORT",
+        "VIPERCAPTURE_SWIFTSHADER",
+        "VIPERCAPTURE_IN_DOCKER",
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+    ):
+        os.environ.pop(name, None)
+
+
 class EnvKnobTests(unittest.TestCase):
     def test_persistent_and_sweetspot_default_off(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=False):
-            for name in (
-                "VIPERCAPTURE_PATCHRIGHT_PERSISTENT",
-                "VIPERCAPTURE_PATCHRIGHT_SWEETSPOT",
-                "VIPERCAPTURE_BROWSER_CHANNEL",
-                "VIPERCAPTURE_HEADLESS",
-                "VIPERCAPTURE_PATCHRIGHT_NO_VIEWPORT",
-                "VIPERCAPTURE_SWIFTSHADER",
-            ):
-                os.environ.pop(name, None)
+            _clear_launch_env()
             self.assertFalse(persistent_context_enabled())
             self.assertFalse(sweetspot_enabled())
             self.assertEqual(browser_channel(), "chromium")
@@ -62,7 +69,55 @@ class EnvKnobTests(unittest.TestCase):
             self.assertFalse(no_viewport_enabled())
             self.assertFalse(swiftshader_enabled())
             self.assertTrue(turnstile_click_enabled())
-            self.assertEqual(turnstile_timeout_ms(), 20_000)
+            self.assertEqual(turnstile_timeout_ms(), 30_000)
+
+    def test_display_defaults_to_sweetspot_outside_docker(self) -> None:
+        with mock.patch.dict(os.environ, {"DISPLAY": ":1"}, clear=False):
+            os.environ.pop("VIPERCAPTURE_PATCHRIGHT_SWEETSPOT", None)
+            os.environ.pop("VIPERCAPTURE_PATCHRIGHT_PERSISTENT", None)
+            os.environ.pop("VIPERCAPTURE_BROWSER_CHANNEL", None)
+            os.environ.pop("VIPERCAPTURE_HEADLESS", None)
+            os.environ.pop("VIPERCAPTURE_PATCHRIGHT_NO_VIEWPORT", None)
+            os.environ.pop("VIPERCAPTURE_IN_DOCKER", None)
+            with mock.patch(
+                "vipercapture.browser_launch.running_in_docker", return_value=False
+            ):
+                self.assertTrue(sweetspot_enabled())
+                self.assertTrue(persistent_context_enabled())
+                self.assertEqual(browser_channel(), "chrome")
+                self.assertFalse(headless_enabled())
+                self.assertTrue(no_viewport_enabled())
+                self.assertTrue(omit_custom_user_agent())
+
+    def test_display_does_not_force_headed_in_docker(self) -> None:
+        with mock.patch.dict(os.environ, {"DISPLAY": ":99"}, clear=False):
+            os.environ.pop("VIPERCAPTURE_PATCHRIGHT_SWEETSPOT", None)
+            os.environ.pop("VIPERCAPTURE_PATCHRIGHT_PERSISTENT", None)
+            os.environ.pop("VIPERCAPTURE_BROWSER_CHANNEL", None)
+            os.environ.pop("VIPERCAPTURE_HEADLESS", None)
+            with mock.patch(
+                "vipercapture.browser_launch.running_in_docker", return_value=True
+            ):
+                self.assertFalse(sweetspot_enabled())
+                self.assertFalse(persistent_context_enabled())
+                self.assertEqual(browser_channel(), "chromium")
+                self.assertTrue(headless_enabled())
+                self.assertFalse(no_viewport_enabled())
+
+    def test_explicit_sweetspot_off_wins_over_display(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"DISPLAY": ":1", "VIPERCAPTURE_PATCHRIGHT_SWEETSPOT": "0"},
+            clear=False,
+        ):
+            os.environ.pop("VIPERCAPTURE_HEADLESS", None)
+            os.environ.pop("VIPERCAPTURE_BROWSER_CHANNEL", None)
+            with mock.patch(
+                "vipercapture.browser_launch.running_in_docker", return_value=False
+            ):
+                self.assertFalse(sweetspot_enabled())
+                self.assertEqual(browser_channel(), "chromium")
+                self.assertTrue(headless_enabled())
 
     def test_persistent_flag_enables_launch_path(self) -> None:
         with mock.patch.dict(os.environ, {"VIPERCAPTURE_PATCHRIGHT_PERSISTENT": "1"}):
@@ -124,9 +179,7 @@ class EnvKnobTests(unittest.TestCase):
 class LaunchOptionTests(unittest.TestCase):
     def test_default_launch_is_headless_chromium_without_swiftshader(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("VIPERCAPTURE_SWIFTSHADER", None)
-            os.environ.pop("VIPERCAPTURE_BROWSER_CHANNEL", None)
-            os.environ.pop("VIPERCAPTURE_HEADLESS", None)
+            _clear_launch_env()
             options = chromium_launch_options(gpu_mode="off")
             self.assertTrue(options["headless"])
             self.assertEqual(options["channel"], "chromium")
@@ -190,7 +243,7 @@ class LaunchOptionTests(unittest.TestCase):
             ):
                 hint = headed_chrome_hint()
         self.assertIsNotNone(hint)
-        self.assertIn("VIPERCAPTURE_BROWSER_CHANNEL=chrome", hint or "")
+        self.assertIn("no_viewport", hint or "")
         self.assertIn("not a Cloudflare bypass", hint or "")
 
     def test_hint_skipped_in_docker(self) -> None:
