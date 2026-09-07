@@ -181,13 +181,16 @@ replace container/host egress controls.
 CAPTCHA detection recognizes blocking interstitials from Cloudflare,
 reCAPTCHA, hCaptcha, Arkose Labs, DataDome, AWS WAF, GeeTest, Friendly Captcha,
 MTCaptcha, Imperva, and HUMAN/PerimeterX, including widgets inside open shadow
-roots. An ordinary embedded widget does not fail a capture until it becomes a
-blocking challenge. Cloudflare Turnstile interstitials are clicked through
-Patchright frames/locators, waited on, and retried once; interactive widgets
-(including nowsecure.nl) may still remain. Detection is heuristic and returns
-the provider, kind, confidence, and signals in the error details. ViperCapture
-does not call captcha-solving services, mint Turnstile tokens, or claim a
-Cloudflare bypass.
+roots. Closed-shadow Cloudflare iframes (`cf-chl-widget-*`) are detected with
+Patchright frames/locators because `page.evaluate` cannot see them. An ordinary
+embedded widget from a non-Cloudflare provider does not fail a capture until it
+becomes a blocking challenge. A Cloudflare Turnstile embedded widget is clicked
+when reachable; it is not treated as already passed. After a click, Stealth
+waits for a token, success UI, or real-content bypass marker and ignores a
+stale navigation 403 once those appear. Interactive widgets may still remain.
+Detection is heuristic and returns the provider, kind, confidence, and signals
+in the error details. ViperCapture does not call captcha-solving services, mint
+Turnstile tokens, or claim a Cloudflare bypass.
 
 An authorized caller can also complete an access flow with an independent
 external tool, then submit a fresh render using short-lived, target-scoped

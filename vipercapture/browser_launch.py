@@ -55,8 +55,19 @@ def display_available() -> bool:
 
 
 def sweetspot_enabled() -> bool:
-    """Composite opt-in for Patchright's headed persistent Chrome path."""
-    return env_flag("VIPERCAPTURE_PATCHRIGHT_SWEETSPOT")
+    """Headed persistent Chrome: explicit flag, or a workstation display.
+
+    When ``DISPLAY`` / ``WAYLAND_DISPLAY`` is set and we are not in Docker,
+    default to Patchright's supported sweet spot (persistent + chrome + headed
+    + ``no_viewport``). Docker/GHCR often has ``DISPLAY`` for Xvfb and must
+    keep headless bundled Chromium unless the operator opts in.
+    """
+    raw = env_value("VIPERCAPTURE_PATCHRIGHT_SWEETSPOT")
+    if raw is not None:
+        return raw.lower() not in _FALSE
+    if running_in_docker():
+        return False
+    return display_available()
 
 
 def persistent_context_enabled() -> bool:
@@ -103,7 +114,7 @@ def turnstile_click_enabled() -> bool:
 
 
 def turnstile_timeout_ms() -> int:
-    return max(1_000, min(120_000, env_int("VIPERCAPTURE_TURNSTILE_TIMEOUT_MS", 20_000)))
+    return max(1_000, min(120_000, env_int("VIPERCAPTURE_TURNSTILE_TIMEOUT_MS", 30_000)))
 
 
 def omit_custom_user_agent(*, headless: bool | None = None, channel: str | None = None) -> bool:
@@ -371,8 +382,8 @@ def headed_chrome_hint() -> str | None:
         return None
     return (
         "DISPLAY is set. Patchright's supported sweet spot is headed Google Chrome "
-        "with a persistent profile: VIPERCAPTURE_BROWSER_CHANNEL=chrome "
-        "VIPERCAPTURE_HEADLESS=0 VIPERCAPTURE_PATCHRIGHT_PERSISTENT=1. "
+        "with a persistent profile (persistent + chrome + headed + no_viewport). "
+        "Set VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=0 to keep headless Chromium. "
         "Docker/GHCR should keep headless bundled Chromium. Interactive Turnstile "
         "may still require a human or a site-owner allowlist; this is not a "
         "Cloudflare bypass."

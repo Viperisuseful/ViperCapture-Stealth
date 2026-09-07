@@ -36,8 +36,15 @@ PATCHRIGHT_STAMP = ROOT / ".venv" / ".patchright_stamp"
 
 
 def browser_install_targets() -> list[str]:
-    """Install Chrome when requested; otherwise bundled Chromium."""
-    channel = os.environ.get("VIPERCAPTURE_BROWSER_CHANNEL", "chromium").strip().lower()
+    """Install Chrome when requested or when the DISPLAY sweet spot is active."""
+    channel = os.environ.get("VIPERCAPTURE_BROWSER_CHANNEL", "").strip().lower()
+    if not channel:
+        try:
+            from vipercapture.browser_launch import browser_channel
+
+            channel = browser_channel()
+        except Exception:
+            channel = "chromium"
     if channel == "chrome":
         return ["chrome"]
     return ["chromium"]

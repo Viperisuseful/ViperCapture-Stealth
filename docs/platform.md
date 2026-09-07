@@ -115,13 +115,10 @@ Patchright’s “do not inject a custom user-agent” guidance. Set
 `playwright-stealth` and is not a CAPTCHA or Cloudflare exploit.
 
 Prefer headed Chrome when the environment allows it **and** you are not in
-Docker/GHCR. When `DISPLAY` is set on a workstation:
-
-```bash
-VIPERCAPTURE_BROWSER_CHANNEL=chrome
-VIPERCAPTURE_HEADLESS=0
-VIPERCAPTURE_PATCHRIGHT_PERSISTENT=1
-```
+Docker/GHCR. When `DISPLAY` is set on a workstation, Stealth defaults to
+Patchright’s supported sweet spot (persistent + `chrome` + headed +
+`no_viewport`) unless you set `VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=0`. Docker
+images often have `DISPLAY` for Xvfb; headed mode is **not** forced there.
 
 `VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=1` turns on that persistent headed Chrome
 path (including `no_viewport`) unless Docker-style env already pins
@@ -135,10 +132,11 @@ Per-request viewport, user-agent, and proxy context options stay on the default
 `launch()` + `new_context()` path; persistent mode is the Patchright sweet spot,
 not a second full isolated-context renderer.
 
-Cloudflare Turnstile: Stealth clicks a reachable checkbox via Patchright
-frames/locators, waits for the interstitial to clear, and retries once. This
-is not a Cloudflare bypass. Interactive challenges may still need a human or
-a site-owner allowlist.
+Cloudflare Turnstile: Stealth detects widgets through Patchright frames/locators
+as well as open-DOM evaluate, clicks a reachable checkbox (not `body`), waits
+for a token or bypass marker, and retries with backoff. Embedded widgets are
+not treated as already passed. This is not a Cloudflare bypass. Interactive
+challenges may still need a human or a site-owner allowlist.
 
 ViperCapture only auto-clicks that Turnstile widget; it does not ship solvers.
 To let an operator connect an approved internal or third-party integration, set

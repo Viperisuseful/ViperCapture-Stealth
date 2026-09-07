@@ -22,8 +22,10 @@ and opens the local interface. Set `VIPERCAPTURE_BROWSER_CHANNEL=chrome` and
 `VIPERCAPTURE_HEADLESS=0` for headed Chrome when a display and Google Chrome
 are available. The Docker/GHCR default is headless bundled Chromium: usable
 in slim images, but weaker against bot detection than headed Chrome. Do not
-set `VIPERCAPTURE_HEADLESS=0` in the published image. Opt into Patchright’s
-persistent path with `VIPERCAPTURE_PATCHRIGHT_PERSISTENT=1` (or
+set `VIPERCAPTURE_HEADLESS=0` in the published image. On a workstation with
+`DISPLAY` set, Stealth defaults to Patchright’s headed persistent Chrome sweet
+spot; set `VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=0` to keep headless Chromium. Opt
+into that path explicitly with `VIPERCAPTURE_PATCHRIGHT_PERSISTENT=1` (or
 `VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=1`) only on a workstation that has Chrome
 and a display. The Docker image already includes FFmpeg. This fork does not
 install Firefox or WebKit.
@@ -163,10 +165,11 @@ and restart the service normally.
 
 The public engine implements the feature set documented in [API and workflows](api.md).
 It blocks detected page-level challenges by default. Cloudflare Turnstile may
-be completed when Patchright can click the checkbox; interactive Turnstile can
-still remain. Callers may set `proceed_on_captcha: true` to capture the visible
-challenge as displayed. ViperCapture does not ship solvers or a Cloudflare
-bypass.
+be completed when Patchright can click the checkbox and a token or bypass
+marker appears; interactive Turnstile without a clickable checkbox still
+cannot complete without a solver or a human. Callers may set
+`proceed_on_captcha: true` to capture the visible challenge as displayed.
+ViperCapture does not ship solvers or a Cloudflare bypass.
 
 Polling-based jobs are enabled by default and use the same rendering contract,
 SSRF controls, concurrency semaphore, and pixel limits as `/v1/render`. The
