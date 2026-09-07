@@ -3,19 +3,39 @@
 This guide is for owners and administrators authorizing captures of a site they
 control. ViperCapture Stealth uses Patchright’s supported Chromium stealth
 patches (Runtime.enable avoidance, Console API disable, automation flags,
-closed shadow DOM, init-script injection via Routes). That is not a custom
-Cloudflare exploit or CAPTCHA bypass. The service detects blocking challenges
-and, for Cloudflare Turnstile, clicks a reachable checkbox through Patchright
-frames/locators (including closed-shadow `cf-chl-widget-*` iframes that page
-JavaScript cannot see), uses a human-like mouse path, waits for a managed
-auto-pass, and retries with backoff. An embedded widget is not treated as
-already passed. It does not call solver APIs, mint tokens, or evade another
-site's access controls. Interactive Turnstile may still remain after an honest
-click; treat that as a challenge, not a product failure you can “bypass.”
-A public test-key widget (nowsecure.nl) can complete when the checkbox is
-actually clicked. A closed-shadow managed challenge (for example
-scrapingcourse) can complete when locators see the iframe. Neither is a
-general Cloudflare bypass.
+closed shadow DOM, init-script injection via Routes). That is **challenge
+handling**, not a custom Cloudflare exploit, CAPTCHA solver, token farm, or
+WebGL fingerprint spoof. See the README
+[Stealth mode / Patchright](../README.md#stealth-mode--patchright) section for
+install, env knobs, and the headed-Chrome sweet spot.
+
+## Turnstile complete-when-possible
+
+For Cloudflare Turnstile, Stealth tries to **complete the widget when
+possible** (PRs #5 and #6):
+
+- Clicks a reachable checkbox through Patchright frames/locators, including
+  closed-shadow `cf-chl-widget-*` iframes that `page.evaluate` cannot see. It
+  does not poke closed shadow with a blind evaluate.
+- Uses a human-like mouse path, waits for a managed auto-pass, then retries
+  the checkbox with backoff.
+- Does **not** treat mere `embedded_widget` presence as a pass. Clear requires
+  the widget to be gone, or a token / success UI / real-content marker
+  (`cf-turnstile-response`, “you bypassed”, `#challenge-success`).
+- The auto-pass `stop_when` probe binds `page` (#6). Calling it unbound was a
+  `TypeError` on live challenge pages.
+- Ignores a stale navigation 403 once a token, success UI, or real-content
+  bypass copy is present.
+
+It does not call solver APIs, mint tokens, or evade another site's access
+controls. Interactive Turnstile may still remain after an honest click; treat
+that as a challenge, not a product failure you can “bypass.”
+
+**When it works:** public test-key widgets (nowsecure.nl) and closed-shadow
+managed pages with a clickable checkbox (scrapingcourse in A/B) on
+**persistent headed Chrome**. **When it will not:** interactive hard
+challenges, many production widgets, and headless Docker/GHCR. Neither A/B
+result is a general Cloudflare bypass.
 
 ## Create an access rule
 
@@ -98,12 +118,19 @@ rate limits and security middleware too.
   a human. `proceed_on_captcha: true` captures the challenge as displayed; it
   does not mint tokens or bypass Cloudflare.
 - Interactive Turnstile without a clickable checkbox still cannot complete
-  without a solver or a human. nowsecure.nl’s test-key widget can complete
-  when the checkbox is clicked; many production widgets will not. That is an
-  inherent interactive challenge, not a Stealth “bypass.”
+  without a solver or a human. nowsecure.nl’s test-key widget and
+  scrapingcourse-style closed-shadow frames can complete when locators see
+  the checkbox on headed persistent Chrome; many production widgets and
+  headless Docker/GHCR will not. That is inherent challenge handling, not a
+  Stealth “bypass.”
 - A 403 from the original navigation is ignored once the page shows a Turnstile
   token, success UI, or real-content bypass copy. Do not treat a stale 403 as
   proof the challenge is still up.
+- If a live challenge page used to raise
+  `TypeError: _checkbox_target_available() missing 1 required positional
+  argument: 'page'`, that was the #6 `stop_when` bind miss. Current tip binds
+  `page` into the lambda; upgrade past #6 rather than treating it as a WAF
+  failure.
 - For missing fonts or images, inspect the diagnostic bundle for blocked
   cross-origin assets and authorize an asset host only when you control it.
 

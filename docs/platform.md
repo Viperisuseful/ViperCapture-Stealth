@@ -132,13 +132,23 @@ Per-request viewport, user-agent, and proxy context options stay on the default
 `launch()` + `new_context()` path; persistent mode is the Patchright sweet spot,
 not a second full isolated-context renderer.
 
-Cloudflare Turnstile: Stealth detects widgets through Patchright frames/locators
-as well as open-DOM evaluate, clicks a reachable checkbox (not `body`), waits
-for a token or bypass marker, and retries with backoff. Embedded widgets are
-not treated as already passed. This is not a Cloudflare bypass. Interactive
-challenges may still need a human or a site-owner allowlist.
+Cloudflare Turnstile is **complete-when-possible** (PRs #5 and #6). Stealth
+detects widgets through Patchright frames/locators (including closed-shadow
+`cf-chl-widget-*` iframes that `page.evaluate` cannot see) as well as
+open-DOM evaluate, clicks a reachable checkbox (not a blind evaluate into
+closed shadow), waits for a token / success UI / real-content marker, and
+retries with backoff. Mere `embedded_widget` presence is not a pass. A stale
+navigation 403 is ignored after those markers. The auto-pass `stop_when`
+probe binds `page` (#6 TypeError hotfix). This is challenge handling, not a
+Cloudflare bypass. Public test widgets (nowsecure / scrapingcourse) can
+complete on persistent headed Chrome; interactive hard challenges, many
+production widgets, and headless Docker/GHCR often will not. A human or a
+site-owner allowlist remains the supported path for sites you administer.
+See the README [Stealth mode / Patchright](../README.md#stealth-mode--patchright)
+section for install, env knobs, and the sweet-spot quickstart.
 
-ViperCapture only auto-clicks that Turnstile widget; it does not ship solvers.
+ViperCapture only auto-clicks that Turnstile widget; it does not ship solvers,
+token farms, or WebGL fingerprint spoofing.
 To let an operator connect an approved internal or third-party integration, set
 `VIPERCAPTURE_CAPTCHA_HANDLER_FACTORY=package.module:create_handler`. The
 factory is called once at startup and must return an async callable with this

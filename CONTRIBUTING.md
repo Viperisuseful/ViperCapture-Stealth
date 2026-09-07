@@ -31,9 +31,11 @@ python launch.py
 
 `python launch.py` is the supported setup and startup method. It prefers uv
 when uv is on `PATH` to create `.venv` and install from `requirements.txt`,
-then installs Patchright Chromium (`python -m patchright install chromium`)
-and starts the app. Set `VIPERCAPTURE_BROWSER_CHANNEL=chrome` to install
-Google Chrome instead. Without uv it falls back to `python -m venv` and pip.
+then installs Patchright browsers (`python -m patchright install chrome`
+when `VIPERCAPTURE_BROWSER_CHANNEL=chrome` or the DISPLAY sweet spot is
+active; otherwise `chromium`) and starts the app. Set
+`VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=1` (or `VIPERCAPTURE_BROWSER_CHANNEL=chrome`)
+to install Google Chrome. Without uv it falls back to `python -m venv` and pip.
 Set `VIPERCAPTURE_USE_UV=0` to force the pip path. Existing pip-only
 workflows stay valid:
 
