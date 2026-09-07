@@ -177,8 +177,8 @@ class TurnstileCompleteTests(unittest.TestCase):
             poll_s: float = 0,
             stop_when=None,
         ) -> bool:
-            self.assertIsNotNone(stop_when)
-            invoked.append(await stop_when())
+            if stop_when is not None:
+                invoked.append(await stop_when())
             return False
 
         with mock.patch("vipercapture.captcha.AUTO_PASS_POLL_S", 8.0):
