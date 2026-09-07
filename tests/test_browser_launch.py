@@ -462,6 +462,225 @@ class PersistentWrapperTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_render_lock_released_after_setup_cancellation(self) -> None:
+        class FakeInner:
+            browser = None
+
+        async def cancel_reset(_context: object) -> None:
+            raise asyncio.CancelledError()
+
+        async def run() -> None:
+            browser = PersistentBrowser(
+                FakeInner(), no_viewport=True, omit_user_agent=True
+            )
+            with mock.patch(
+                "vipercapture.browser_launch.reset_persistent_browser_state",
+                side_effect=cancel_reset,
+            ):
+                with self.assertRaises(asyncio.CancelledError):
+                    await browser.new_context()
+            self.assertFalse(browser._render_lock.locked())
+
+            borrowed = await browser.new_context()
+            self.assertTrue(browser._render_lock.locked())
+            await borrowed.close()
+            self.assertFalse(browser._render_lock.locked())
+
+        asyncio.run(run())
+
+    def test_render_lock_released_after_setup_exception(self) -> None:
+        class FakeInner:
+            browser = None
+
+        async def fail_apply(_context: object, _storage: object) -> None:
+            raise RuntimeError("apply failed")
+
+        async def run() -> None:
+            browser = PersistentBrowser(
+                FakeInner(), no_viewport=True, omit_user_agent=True
+            )
+            with mock.patch(
+                "vipercapture.browser_launch.apply_persistent_storage_state",
+                side_effect=fail_apply,
+            ):
+                with self.assertRaises(RuntimeError):
+                    await browser.new_context(storage_state={"cookies": []})
+            self.assertFalse(browser._render_lock.locked())
+
+        asyncio.run(run())
+
+    def test_recording_context_forwards_filtered_settings(self) -> None:
+        created: list[dict[str, object]] = []
+
+        class FakeRecordingContext:
+            async def close(self) -> None:
+                return None
+
+        class FakeBrowser:
+            def is_connected(self) -> bool:
+                return True
+
+            async def new_context(self, **kwargs: object) -> FakeRecordingContext:
+                created.append(kwargs)
+                return FakeRecordingContext()
+
+        class FakeInner:
+            browser = FakeBrowser()
+
+        requested = {
+            "record_video_dir": "/tmp/videos",
+            "record_video_size": {"width": 800, "height": 600},
+            "viewport": {"width": 390, "height": 844},
+            "screen": {"width": 390, "height": 844},
+            "device_scale_factor": 3,
+            "locale": "fr-FR",
+            "timezone_id": "Europe/Paris",
+            "java_script_enabled": False,
+            "geolocation": {"latitude": 48.8, "longitude": 2.3},
+            "proxy": {"server": "http://proxy.example:8080"},
+            "bypass_csp": True,
+            "ignore_https_errors": True,
+            "service_workers": "block",
+            "storage_state": {"cookies": [{"name": "sid"}]},
+        }
+
+        async def run() -> None:
+            wrapper = PersistentBrowser(
+                FakeInner(), no_viewport=False, omit_user_agent=False
+            )
+            borrowed = await wrapper.new_context(**requested)
+            self.assertTrue(borrowed._owns_context)
+            self.assertEqual(created[0]["viewport"], requested["viewport"])
+            self.assertEqual(created[0]["locale"], "fr-FR")
+            self.assertEqual(created[0]["timezone_id"], "Europe/Paris")
+            self.assertFalse(created[0]["java_script_enabled"])
+            self.assertEqual(created[0]["geolocation"], requested["geolocation"])
+            self.assertEqual(created[0]["proxy"], requested["proxy"])
+            self.assertTrue(created[0]["bypass_csp"])
+            self.assertTrue(created[0]["ignore_https_errors"])
+            self.assertEqual(created[0]["service_workers"], "block")
+            self.assertEqual(created[0]["storage_state"], requested["storage_state"])
+            self.assertEqual(created[0]["record_video_dir"], "/tmp/videos")
+            await borrowed.close()
+
+        asyncio.run(run())
+
+    def test_recording_persistent_launch_forwards_filtered_settings(self) -> None:
+        launched: list[dict[str, object]] = []
+
+        class FakeRecordingContext:
+            browser = None
+
+            async def close(self) -> None:
+                return None
+
+        class FakeChromium:
+            async def launch_persistent_context(
+                self, path: str, **options: object
+            ) -> FakeRecordingContext:
+                launched.append(options)
+                return FakeRecordingContext()
+
+        class FakePlaywright:
+            chromium = FakeChromium()
+
+        class FakeInner:
+            browser = None
+
+        async def run() -> None:
+            browser = PersistentBrowser(
+                FakeInner(),
+                no_viewport=False,
+                omit_user_agent=False,
+                playwright=FakePlaywright(),
+                launch_options={"headless": True, "channel": "chrome"},
+            )
+            borrowed = await browser.new_context(
+                record_video_dir="/tmp/vipercapture-video",
+                viewport={"width": 1280, "height": 720},
+                locale="de-DE",
+                timezone_id="Europe/Berlin",
+                java_script_enabled=True,
+                bypass_csp=True,
+                ignore_https_errors=False,
+                service_workers="block",
+            )
+            self.assertEqual(len(launched), 1)
+            options = launched[0]
+            self.assertEqual(options["viewport"], {"width": 1280, "height": 720})
+            self.assertEqual(options["locale"], "de-DE")
+            self.assertEqual(options["timezone_id"], "Europe/Berlin")
+            self.assertTrue(options["java_script_enabled"])
+            self.assertTrue(options["bypass_csp"])
+            self.assertFalse(options["ignore_https_errors"])
+            self.assertEqual(options["service_workers"], "block")
+            self.assertEqual(options["channel"], "chrome")
+            await borrowed.close()
+
+        asyncio.run(run())
+
+    def test_failed_recording_launch_removes_scratch_profile(self) -> None:
+        leftover: list[str] = []
+
+        class FakeChromium:
+            async def launch_persistent_context(
+                self, path: str, **_options: object
+            ) -> None:
+                leftover.append(path)
+                raise RuntimeError("chrome refused")
+
+        class FakePlaywright:
+            chromium = FakeChromium()
+
+        class FakeInner:
+            browser = None
+
+        async def run() -> None:
+            browser = PersistentBrowser(
+                FakeInner(),
+                no_viewport=True,
+                omit_user_agent=True,
+                playwright=FakePlaywright(),
+                launch_options={"headless": True},
+            )
+            with self.assertRaises(RuntimeError):
+                await browser.new_context(record_video_dir="/tmp/videos")
+            self.assertEqual(len(leftover), 1)
+            self.assertFalse(Path(leftover[0]).exists())
+
+        asyncio.run(run())
+
+    def test_cancelled_recording_launch_removes_scratch_profile(self) -> None:
+        leftover: list[str] = []
+
+        class FakeChromium:
+            async def launch_persistent_context(
+                self, path: str, **_options: object
+            ) -> None:
+                leftover.append(path)
+                raise asyncio.CancelledError()
+
+        class FakePlaywright:
+            chromium = FakeChromium()
+
+        class FakeInner:
+            browser = None
+
+        async def run() -> None:
+            browser = PersistentBrowser(
+                FakeInner(),
+                no_viewport=True,
+                omit_user_agent=True,
+                playwright=FakePlaywright(),
+                launch_options={"headless": True},
+            )
+            with self.assertRaises(asyncio.CancelledError):
+                await browser.new_context(record_video_dir="/tmp/videos")
+            self.assertEqual(len(leftover), 1)
+            self.assertFalse(Path(leftover[0]).exists())
+
+        asyncio.run(run())
+
     def test_persistent_slots_are_reused_after_release(self) -> None:
         self.assertEqual(next_persistent_slot(), 0)
         self.assertEqual(next_persistent_slot(), 1)

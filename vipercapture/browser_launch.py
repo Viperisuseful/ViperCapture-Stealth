@@ -487,30 +487,30 @@ class PersistentBrowser:
         if video_options.get("record_video_dir"):
             return await self._launch_recording_context(filtered, video_options)
         await self._render_lock.acquire()
+        transferred = False
         try:
             await reset_persistent_browser_state(self._context)
             await apply_persistent_storage_state(
                 self._context, filtered.get("storage_state")
             )
-            return BorrowedPersistentContext(
+            borrowed = BorrowedPersistentContext(
                 self._context,
                 isolate_on_close=True,
                 render_lock=self._render_lock,
             )
-        except Exception:
-            if self._render_lock.locked():
+            transferred = True
+            return borrowed
+        finally:
+            if not transferred and self._render_lock.locked():
                 self._render_lock.release()
-            raise
 
     async def _launch_recording_context(
         self,
         filtered: dict[str, object],
         video_options: dict[str, object],
     ) -> BorrowedPersistentContext:
-        recording_kwargs = dict(video_options)
-        storage_state = filtered.get("storage_state")
-        if storage_state is not None:
-            recording_kwargs["storage_state"] = storage_state
+        recording_kwargs = dict(filtered)
+        recording_kwargs.update(video_options)
         browser = getattr(self._context, "browser", None)
         new_context = getattr(browser, "new_context", None) if browser is not None else None
         if callable(new_context):
@@ -525,14 +525,16 @@ class PersistentBrowser:
                 "or browser.new_context"
             )
         options = dict(self._launch_options)
-        options.update(video_options)
-        if storage_state is not None:
-            options["storage_state"] = storage_state
+        options.update(recording_kwargs)
         scratch = Path(tempfile.mkdtemp(prefix="vipercapture-pr-video-"))
-        context = await self._playwright.chromium.launch_persistent_context(
-            str(scratch),
-            **options,
-        )
+        try:
+            context = await self._playwright.chromium.launch_persistent_context(
+                str(scratch),
+                **options,
+            )
+        except BaseException:
+            shutil.rmtree(scratch, ignore_errors=True)
+            raise
         return BorrowedPersistentContext(
             context,
             owns_context=True,
