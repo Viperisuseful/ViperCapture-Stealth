@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 from vipercapture.browser_launch import (  # noqa: E402
     BorrowedPersistentContext,
     PersistentBrowser,
+    apply_persistent_storage_state,
     browser_channel,
     chromium_launch_args,
     chromium_launch_options,
@@ -22,15 +23,23 @@ from vipercapture.browser_launch import (  # noqa: E402
     filter_persistent_context_options,
     headed_chrome_hint,
     headless_enabled,
+    launch_chromium,
+    next_persistent_slot,
     no_viewport_enabled,
     omit_custom_user_agent,
     persistent_context_enabled,
     persistent_launch_options,
     persistent_user_data_dir,
+    release_persistent_slot,
+    reset_persistent_browser_state,
+    reset_persistent_slots,
+    slot_from_user_data_dir,
     sweetspot_enabled,
     swiftshader_enabled,
     turnstile_click_enabled,
     turnstile_timeout_ms,
+    used_persistent_slots,
+    video_recording_options,
 )
 
 
@@ -195,6 +204,10 @@ class LaunchOptionTests(unittest.TestCase):
 
 
 class PersistentWrapperTests(unittest.TestCase):
+    def setUp(self) -> None:
+        reset_persistent_slots()
+        self.addCleanup(reset_persistent_slots)
+
     def test_borrowed_context_closes_pages_not_profile(self) -> None:
         closed: list[str] = []
 
@@ -246,6 +259,374 @@ class PersistentWrapperTests(unittest.TestCase):
             self.assertEqual(added, [{"name": "session"}])
 
         asyncio.run(run())
+
+    def test_new_context_uses_filtered_options_return_value(self) -> None:
+        added: list[object] = []
+
+        class FakeInner:
+            browser = None
+
+            async def add_cookies(self, cookies: list[object]) -> None:
+                added.extend(cookies)
+
+        async def run() -> None:
+            browser = PersistentBrowser(
+                FakeInner(), no_viewport=True, omit_user_agent=True
+            )
+            with mock.patch(
+                "vipercapture.browser_launch.filter_persistent_context_options",
+                return_value={"storage_state": {"cookies": [{"name": "from-filter"}]}},
+            ) as filtered:
+                await browser.new_context(
+                    user_agent="Custom UA",
+                    storage_state={"cookies": [{"name": "original"}]},
+                )
+            filtered.assert_called_once()
+            self.assertEqual(added, [{"name": "from-filter"}])
+
+        asyncio.run(run())
+
+    def test_new_context_isolates_cookies_and_applies_origins(self) -> None:
+        class FakePage:
+            def __init__(self, owner: "FakeInner") -> None:
+                self.owner = owner
+                self.closed = False
+
+            async def route(self, _pattern: str, _handler: object) -> None:
+                return None
+
+            async def goto(self, origin: str, **_kwargs: object) -> None:
+                self.owner.visits.append(origin)
+
+            async def evaluate(self, _script: str, payload: dict[str, object]) -> None:
+                origin = self.owner.visits[-1] if self.owner.visits else ""
+                if payload.get("clear"):
+                    self.owner.storage.pop(origin, None)
+                    return
+                self.owner.storage[origin] = {
+                    item["name"]: item["value"]
+                    for item in payload.get("items") or []
+                }
+
+            async def close(self) -> None:
+                self.closed = True
+
+        class FakeInner:
+            browser = None
+
+            def __init__(self) -> None:
+                self.cookies: list[dict[str, object]] = [{"name": "stale", "value": "1"}]
+                self.origins: list[dict[str, object]] = [
+                    {
+                        "origin": "https://stale.example",
+                        "localStorage": [{"name": "old", "value": "yes"}],
+                    }
+                ]
+                self.storage = {"https://stale.example": {"old": "yes"}}
+                self.visits: list[str] = []
+
+            async def storage_state(self) -> dict[str, object]:
+                return {
+                    "cookies": list(self.cookies),
+                    "origins": [
+                        {
+                            "origin": origin,
+                            "localStorage": [
+                                {"name": name, "value": value}
+                                for name, value in items.items()
+                            ],
+                        }
+                        for origin, items in self.storage.items()
+                    ],
+                }
+
+            async def clear_cookies(self) -> None:
+                self.cookies.clear()
+
+            async def add_cookies(self, cookies: list[dict[str, object]]) -> None:
+                self.cookies.extend(cookies)
+
+            async def new_page(self) -> FakePage:
+                return FakePage(self)
+
+        async def run() -> None:
+            inner = FakeInner()
+            browser = PersistentBrowser(
+                inner, no_viewport=True, omit_user_agent=True
+            )
+            borrowed = await browser.new_context(
+                storage_state={
+                    "cookies": [{"name": "session", "value": "a"}],
+                    "origins": [
+                        {
+                            "origin": "https://app.example",
+                            "localStorage": [{"name": "token", "value": "abc"}],
+                        }
+                    ],
+                }
+            )
+            self.assertNotIn("stale", {cookie["name"] for cookie in inner.cookies})
+            self.assertEqual(inner.cookies, [{"name": "session", "value": "a"}])
+            self.assertEqual(inner.storage.get("https://app.example"), {"token": "abc"})
+            self.assertNotIn("https://stale.example", inner.storage)
+            await borrowed.close()
+            self.assertEqual(inner.cookies, [])
+            self.assertEqual(inner.storage, {})
+
+            second = await browser.new_context(
+                storage_state={"cookies": [{"name": "other", "value": "b"}]}
+            )
+            self.assertEqual(inner.cookies, [{"name": "other", "value": "b"}])
+            await second.close()
+
+        asyncio.run(run())
+
+    def test_video_options_relaunch_persistent_context(self) -> None:
+        launched: list[tuple[str, dict[str, object]]] = []
+
+        class FakeRecordingContext:
+            browser = None
+
+            async def close(self) -> None:
+                return None
+
+        class FakeChromium:
+            async def launch_persistent_context(
+                self, path: str, **options: object
+            ) -> FakeRecordingContext:
+                launched.append((path, options))
+                return FakeRecordingContext()
+
+        class FakePlaywright:
+            chromium = FakeChromium()
+
+        class FakeInner:
+            browser = None
+
+        async def run() -> None:
+            browser = PersistentBrowser(
+                FakeInner(),
+                no_viewport=True,
+                omit_user_agent=True,
+                playwright=FakePlaywright(),
+                launch_options={"headless": True, "channel": "chrome"},
+            )
+            borrowed = await browser.new_context(
+                user_agent="should-drop",
+                record_video_dir="/tmp/vipercapture-video",
+                record_video_size={"width": 1280, "height": 720},
+                storage_state={"cookies": [{"name": "sid"}], "origins": []},
+            )
+            self.assertTrue(borrowed._owns_context)
+            self.assertEqual(len(launched), 1)
+            _path, options = launched[0]
+            self.assertEqual(options["record_video_dir"], "/tmp/vipercapture-video")
+            self.assertEqual(
+                options["record_video_size"], {"width": 1280, "height": 720}
+            )
+            self.assertEqual(options["storage_state"]["cookies"], [{"name": "sid"}])
+            self.assertNotIn("user_agent", options)
+            await borrowed.close()
+
+        asyncio.run(run())
+
+    def test_video_options_use_browser_new_context_when_available(self) -> None:
+        created: list[dict[str, object]] = []
+
+        class FakeRecordingContext:
+            async def close(self) -> None:
+                return None
+
+        class FakeBrowser:
+            def is_connected(self) -> bool:
+                return True
+
+            async def new_context(self, **kwargs: object) -> FakeRecordingContext:
+                created.append(kwargs)
+                return FakeRecordingContext()
+
+        class FakeInner:
+            browser = FakeBrowser()
+
+        async def run() -> None:
+            wrapper = PersistentBrowser(
+                FakeInner(), no_viewport=True, omit_user_agent=True
+            )
+            borrowed = await wrapper.new_context(
+                record_video_dir="/tmp/videos",
+                record_video_size={"width": 800, "height": 600},
+            )
+            self.assertTrue(borrowed._owns_context)
+            self.assertEqual(created[0]["record_video_dir"], "/tmp/videos")
+            await borrowed.close()
+
+        asyncio.run(run())
+
+    def test_persistent_slots_are_reused_after_release(self) -> None:
+        self.assertEqual(next_persistent_slot(), 0)
+        self.assertEqual(next_persistent_slot(), 1)
+        self.assertEqual(used_persistent_slots(), {0, 1})
+        release_persistent_slot(0)
+        self.assertEqual(next_persistent_slot(), 0)
+        self.assertEqual(used_persistent_slots(), {0, 1})
+
+    def test_launch_reuses_released_profile_directory(self) -> None:
+        launched: list[str] = []
+
+        class FakeContext:
+            browser = None
+
+            async def close(self) -> None:
+                return None
+
+        class FakeChromium:
+            async def launch_persistent_context(
+                self, path: str, **_options: object
+            ) -> FakeContext:
+                launched.append(path)
+                return FakeContext()
+
+        class FakePlaywright:
+            chromium = FakeChromium()
+
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                with mock.patch.dict(
+                    os.environ, {"VIPERCAPTURE_PATCHRIGHT_USER_DATA_DIR": tmp}
+                ):
+                    first = await launch_chromium(
+                        FakePlaywright(), gpu_mode="off", persistent=True
+                    )
+                    self.assertEqual(first.persistent_slot, 0)
+                    first_dir = first.user_data_dir
+                    await first.close()
+                    self.assertEqual(used_persistent_slots(), set())
+                    recycled = await launch_chromium(
+                        FakePlaywright(),
+                        gpu_mode="off",
+                        persistent=True,
+                        user_data_dir=first_dir,
+                    )
+                    self.assertEqual(recycled.persistent_slot, 0)
+                    self.assertEqual(recycled.user_data_dir, first_dir)
+                    await recycled.close()
+                    reused = await launch_chromium(
+                        FakePlaywright(), gpu_mode="off", persistent=True
+                    )
+                    self.assertEqual(reused.persistent_slot, 0)
+                    await reused.close()
+
+        asyncio.run(run())
+        self.assertEqual(slot_from_user_data_dir(Path("/data/slot-7")), 7)
+
+    def test_failed_persistent_launch_releases_slot(self) -> None:
+        class FakeChromium:
+            async def launch_persistent_context(self, _path: str, **_options: object) -> None:
+                raise RuntimeError("launch failed")
+
+        class FakePlaywright:
+            chromium = FakeChromium()
+
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                with mock.patch.dict(
+                    os.environ, {"VIPERCAPTURE_PATCHRIGHT_USER_DATA_DIR": tmp}
+                ):
+                    with self.assertRaises(RuntimeError):
+                        await launch_chromium(
+                            FakePlaywright(), gpu_mode="off", persistent=True
+                        )
+            self.assertEqual(used_persistent_slots(), set())
+
+        asyncio.run(run())
+
+    def test_apply_and_reset_storage_helpers(self) -> None:
+        class FakePage:
+            def __init__(self, owner: "FakeInner") -> None:
+                self.owner = owner
+
+            async def route(self, _pattern: str, _handler: object) -> None:
+                return None
+
+            async def goto(self, origin: str, **_kwargs: object) -> None:
+                self.owner.current = origin
+
+            async def evaluate(self, _script: str, payload: dict[str, object]) -> None:
+                origin = getattr(self.owner, "current", "")
+                if payload.get("clear"):
+                    self.owner.storage.pop(origin, None)
+                else:
+                    self.owner.storage[origin] = list(payload.get("items") or [])
+
+            async def close(self) -> None:
+                return None
+
+        class FakeInner:
+            def __init__(self) -> None:
+                self.cookies: list[object] = [{"name": "keep"}]
+                self.storage: dict[str, object] = {
+                    "https://old.example": [{"name": "x", "value": "1"}]
+                }
+                self.current = ""
+
+            async def storage_state(self) -> dict[str, object]:
+                return {
+                    "cookies": list(self.cookies),
+                    "origins": [
+                        {"origin": origin, "localStorage": items}
+                        for origin, items in self.storage.items()
+                    ],
+                }
+
+            async def clear_cookies(self) -> None:
+                self.cookies.clear()
+
+            async def add_cookies(self, cookies: list[object]) -> None:
+                self.cookies.extend(cookies)
+
+            async def new_page(self) -> FakePage:
+                return FakePage(self)
+
+        async def run() -> None:
+            inner = FakeInner()
+            await reset_persistent_browser_state(inner)
+            self.assertEqual(inner.cookies, [])
+            self.assertEqual(inner.storage, {})
+            await apply_persistent_storage_state(
+                inner,
+                {
+                    "cookies": [{"name": "sid"}],
+                    "origins": [
+                        {
+                            "origin": "https://app.example",
+                            "localStorage": [{"name": "token", "value": "z"}],
+                        }
+                    ],
+                },
+            )
+            self.assertEqual(inner.cookies, [{"name": "sid"}])
+            self.assertEqual(
+                inner.storage["https://app.example"],
+                [{"name": "token", "value": "z"}],
+            )
+
+        asyncio.run(run())
+
+    def test_video_recording_options_extracts_record_keys(self) -> None:
+        self.assertEqual(
+            video_recording_options(
+                {
+                    "record_video_dir": "/tmp/v",
+                    "record_video_size": {"width": 1, "height": 1},
+                    "locale": "en-US",
+                    "record_video_dir_unused": None,
+                }
+            ),
+            {
+                "record_video_dir": "/tmp/v",
+                "record_video_size": {"width": 1, "height": 1},
+            },
+        )
 
     def test_display_available_reads_env(self) -> None:
         with mock.patch.dict(os.environ, {"DISPLAY": ":0"}):

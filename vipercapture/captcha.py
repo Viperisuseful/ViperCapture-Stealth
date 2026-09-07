@@ -219,9 +219,25 @@ def is_cloudflare_challenge(challenge: dict[str, object] | None) -> bool:
     return bool(challenge) and str(challenge.get("provider") or "") == "cloudflare"
 
 
-async def _click_locator(locator: Any, timeout_ms: int = CLICK_TIMEOUT_MS) -> bool:
+def _remaining_timeout_ms(deadline: float | None) -> int | None:
+    if deadline is None:
+        return None
+    return max(0, int((deadline - time.monotonic()) * 1_000))
+
+
+async def _click_locator(
+    locator: Any,
+    timeout_ms: int = CLICK_TIMEOUT_MS,
+    *,
+    deadline: float | None = None,
+) -> bool:
     if locator is None:
         return False
+    remaining = _remaining_timeout_ms(deadline)
+    if remaining is not None:
+        if remaining <= 0:
+            return False
+        timeout_ms = min(timeout_ms, remaining)
     click = getattr(locator, "click", None)
     if not callable(click):
         return False
@@ -248,36 +264,51 @@ def _frame_candidates(page: Any) -> list[Any]:
     return frames
 
 
-async def click_turnstile_widget(page: Any) -> bool:
+async def click_turnstile_widget(
+    page: Any,
+    *,
+    timeout_ms: int | None = None,
+) -> bool:
     """Click the Turnstile checkbox via frames/locators. Never forges tokens."""
+    deadline = (
+        time.monotonic() + max(0, timeout_ms) / 1_000 if timeout_ms is not None else None
+    )
+    if deadline is not None and _remaining_timeout_ms(deadline) == 0:
+        return False
     for frame in _frame_candidates(page):
+        if deadline is not None and (_remaining_timeout_ms(deadline) or 0) <= 0:
+            return False
         get_by_role = getattr(frame, "get_by_role", None)
         if callable(get_by_role):
             try:
                 checkbox = get_by_role("checkbox")
             except Exception:
                 checkbox = None
-            if await _click_locator(checkbox):
+            if await _click_locator(checkbox, deadline=deadline):
                 return True
         locator_factory = getattr(frame, "locator", None)
         if callable(locator_factory):
             for selector in TURNSTILE_CHECKBOX_SELECTORS:
+                if deadline is not None and (_remaining_timeout_ms(deadline) or 0) <= 0:
+                    return False
                 try:
                     target = locator_factory(selector)
                     first = getattr(target, "first", target)
                 except Exception:
                     continue
-                if await _click_locator(first):
+                if await _click_locator(first, deadline=deadline):
                     return True
     locator_factory = getattr(page, "locator", None)
     if callable(locator_factory):
         for selector in (*TURNSTILE_HOST_SELECTORS, *TURNSTILE_FRAME_SELECTORS):
+            if deadline is not None and (_remaining_timeout_ms(deadline) or 0) <= 0:
+                return False
             try:
                 target = locator_factory(selector)
                 first = getattr(target, "first", target)
             except Exception:
                 continue
-            if await _click_locator(first):
+            if await _click_locator(first, deadline=deadline):
                 return True
     return False
 
@@ -316,32 +347,48 @@ async def complete_cloudflare_turnstile(
     honest click. Callers must treat that as an uncleared challenge.
     """
     budget_ms = max(1_000, timeout_ms)
-    auto_pass_ms = min(int(AUTO_PASS_POLL_S * 1_000), budget_ms)
+    deadline = time.monotonic() + budget_ms / 1_000
+
+    def remaining_ms() -> int:
+        return max(0, int((deadline - time.monotonic()) * 1_000))
+
+    auto_pass_ms = min(int(AUTO_PASS_POLL_S * 1_000), remaining_ms())
     if await wait_for_challenge_clear(
         page,
         timeout_ms=auto_pass_ms,
         navigation_status=navigation_status,
     ):
-        await asyncio.sleep(POST_PASS_SETTLE_MS / 1_000)
+        if remaining_ms() > 0:
+            await asyncio.sleep(min(POST_PASS_SETTLE_MS / 1_000, remaining_ms() / 1_000))
         return True
 
-    clicked = await click_turnstile_widget(page)
-    remaining_ms = max(1_000, budget_ms - auto_pass_ms)
-    if await wait_for_challenge_clear(
+    click_budget = remaining_ms()
+    if click_budget <= 0:
+        return False
+    clicked = await click_turnstile_widget(page, timeout_ms=click_budget)
+    leftover = remaining_ms()
+    first_wait = leftover // 2 if clicked else min(2_000, leftover)
+    if leftover > 0 and await wait_for_challenge_clear(
         page,
-        timeout_ms=remaining_ms // 2 if clicked else min(2_000, remaining_ms),
+        timeout_ms=first_wait,
         navigation_status=navigation_status,
     ):
-        await asyncio.sleep(POST_PASS_SETTLE_MS / 1_000)
+        if remaining_ms() > 0:
+            await asyncio.sleep(min(POST_PASS_SETTLE_MS / 1_000, remaining_ms() / 1_000))
         return True
 
-    await click_turnstile_widget(page)
-    if await wait_for_challenge_clear(
+    retry_budget = remaining_ms()
+    if retry_budget <= 0:
+        return False
+    await click_turnstile_widget(page, timeout_ms=retry_budget)
+    final_wait = remaining_ms()
+    if final_wait > 0 and await wait_for_challenge_clear(
         page,
-        timeout_ms=max(1_000, remaining_ms // 2),
+        timeout_ms=final_wait,
         navigation_status=navigation_status,
     ):
-        await asyncio.sleep(POST_PASS_SETTLE_MS / 1_000)
+        if remaining_ms() > 0:
+            await asyncio.sleep(min(POST_PASS_SETTLE_MS / 1_000, remaining_ms() / 1_000))
         return True
     return False
 
