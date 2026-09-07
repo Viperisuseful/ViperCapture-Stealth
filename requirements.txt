@@ -1,7 +1,6 @@
 fastapi>=0.141.1
 uvicorn[standard]>=0.52.1
-playwright>=1.62.0
-playwright-stealth==2.0.3
+patchright>=1.62.0,<1.63
 python-multipart>=0.0.9
 # Intel macOS sidecars currently require the pre-47 wheel series.
 cryptography>=46.0.7,<47.0.0; sys_platform == "darwin" and platform_machine == "x86_64"

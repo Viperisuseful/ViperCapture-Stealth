@@ -1,4 +1,4 @@
-"""Isolated Playwright rendering for ViperCapture artifacts."""
+"""Isolated Patchright Chromium rendering for ViperCapture Stealth artifacts."""
 
 from __future__ import annotations
 
@@ -31,9 +31,9 @@ from uuid import uuid4
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from PIL import Image
-from playwright.async_api import Browser, BrowserContext, Page
-from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+from patchright.async_api import Browser, BrowserContext, Page
+from patchright.async_api import Error as PlaywrightError
+from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from .render_contract import (
     ActionType,
@@ -70,7 +70,7 @@ DEVICE_PLATFORMS = {
     DevicePreset.PIXEL_7: "Linux armv8l",
     DevicePreset.IPAD: "iPad",
 }
-# Used when Playwright's live registry is unavailable. Live descriptors win.
+# Used when Patchright's live registry is unavailable. Live descriptors win.
 DEVICE_DESCRIPTOR_FALLBACKS: dict[DevicePreset, dict[str, object]] = {
     DevicePreset.IPHONE_14: {
         "viewport": {"width": 390, "height": 664},
@@ -100,7 +100,7 @@ def resolved_device_descriptor(
     device: DevicePreset,
     device_descriptors: dict[str, dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    """Return the Playwright device descriptor, or a built-in fallback."""
+    """Return the Patchright device descriptor, or a built-in fallback."""
     name = DEVICE_DESCRIPTOR_NAMES.get(device)
     if name is None:
         return {}
@@ -837,14 +837,17 @@ DIAGNOSTIC_NETWORK_PRIVACY = (
 )
 DIAGNOSTIC_HAR_COMPLETENESS = (
     "HTTP versions come from Chromium CDP Network.responseReceived when that "
-    "session starts, and are backfilled from Resource Timing nextHopProtocol "
-    "on every engine. Firefox and WebKit cannot use CDP, so HTTPS entries "
-    "without Resource Timing stay httpVersion unknown."
+    "session starts, and are backfilled from Resource Timing nextHopProtocol. "
+    "HTTPS entries without Resource Timing stay httpVersion unknown."
+)
+DIAGNOSTIC_CONSOLE_NOTE = (
+    "Console capture is degraded because Patchright disables the Console API "
+    "to avoid Console.enable leaks. console.json may be empty."
 )
 
 
 def _headers_from_source(source: object) -> object:
-    """Read headers without awaiting Playwright's async headers_array()."""
+    """Read headers without awaiting Patchright's async headers_array()."""
     if source is None:
         return None
     headers_array = getattr(source, "headers_array", None)
@@ -1169,7 +1172,7 @@ def apply_observed_http_versions(
 
 
 async def collect_performance_http_versions(page: object) -> dict[str, str]:
-    """Read Resource Timing nextHopProtocol values from any Playwright engine."""
+    """Read Resource Timing nextHopProtocol values from Chromium."""
     evaluate = getattr(page, "evaluate", None)
     if evaluate is None:
         return {}
@@ -1546,6 +1549,8 @@ async def diagnostic_bundle(
     }
     if request.diagnostics.include_har:
         manifest["har_completeness"] = DIAGNOSTIC_HAR_COMPLETENESS
+    if request.diagnostics.include_console:
+        manifest["console_note"] = DIAGNOSTIC_CONSOLE_NOTE
     if page is not None and (
         request.diagnostics.include_har
         or request.diagnostics.include_network
@@ -1777,7 +1782,7 @@ def needs_request_routing(
     custom_headers: dict[str, str],
     cleanup_enabled: bool = False,
 ) -> bool:
-    """Avoid Playwright interception when it provides no behavior."""
+    """Avoid Patchright interception when it provides no behavior."""
     return hosted or bool(custom_headers) or cleanup_enabled
 
 
@@ -2671,7 +2676,10 @@ class RenderEngine:
                             403,
                             False,
                         )
-                    await page.evaluate(action.value or "")
+                    await page.evaluate(
+                        action.value or "",
+                        isolated_context=False,
+                    )
                 if action.delay_ms and action.type is not ActionType.WAIT:
                     await page.wait_for_timeout(min(action.delay_ms, limits.delay_ms))
             except RenderError:
@@ -2871,6 +2879,15 @@ class RenderEngine:
         parent_timeout: asyncio.Timeout | None = None,
     ) -> RenderArtifact:
         from .content_rendering import input_document, render_document_output
+        from .render_contract import CHROMIUM_ONLY_ENGINE_MESSAGE
+
+        if request.engine is not BrowserEngine.CHROMIUM:
+            raise RenderError(
+                "engine_not_supported",
+                CHROMIUM_ONLY_ENGINE_MESSAGE,
+                422,
+                False,
+            )
 
         context_device = device_context_options(request, self.device_descriptors)
         request = apply_device_metrics(request, self.device_descriptors)
@@ -2948,8 +2965,6 @@ class RenderEngine:
                     }
                 if context_device:
                     context_options.update(context_device)
-                    if request.engine.value == BrowserEngine.FIREFOX.value:
-                        context_options.pop("is_mobile", None)
                 context_options.update(
                     {
                         "java_script_enabled": request.network.java_script_enabled,
@@ -3201,10 +3216,13 @@ class RenderEngine:
                 def record_console(message) -> None:
                     if len(console_events) >= MAX_DIAGNOSTIC_EVENTS:
                         return
-                    console_events.append({
-                        "type": message.type,
-                        "text": message.text[:4_096],
-                    })
+                    try:
+                        console_events.append({
+                            "type": getattr(message, "type", "log"),
+                            "text": str(getattr(message, "text", ""))[:4_096],
+                        })
+                    except Exception:
+                        return
 
                 http_versions_by_url: dict[str, list[str]] = {}
                 cdp_protocol_queued = 0
@@ -3231,7 +3249,10 @@ class RenderEngine:
                         return
 
                 if request.diagnostics.bundle:
-                    page.on("console", record_console)
+                    try:
+                        page.on("console", record_console)
+                    except Exception:
+                        pass
                     page.on("response", record_network)
                     page.on("requestfinished", record_network_finished)
                     if request.diagnostics.include_har:

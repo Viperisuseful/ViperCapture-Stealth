@@ -7,7 +7,13 @@ COPY --from=ghcr.io/astral-sh/uv:0.12.10@sha256:2bb3ebca0a796a155094a27773d290c4
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    VIPERCAPTURE_BROWSER_CHANNEL=chromium \
+    VIPERCAPTURE_HEADLESS=1 \
     UV_SYSTEM_PYTHON=1
+
+LABEL org.opencontainers.image.title="ViperCapture Stealth" \
+    org.opencontainers.image.description="Stealth fork of ViperCapture using Patchright Chromium" \
+    org.opencontainers.image.source="https://github.com/Viperisuseful/ViperCapture-Stealth"
 
 WORKDIR /app
 COPY requirements.txt ./
@@ -16,7 +22,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && uv pip install --system --no-cache -r requirements.txt \
     && rm -f /bin/uv /bin/uvx \
-    && python -m playwright install --with-deps --no-shell chromium firefox webkit \
+    && patchright install --with-deps chromium \
     && useradd --create-home --uid 10001 vipercapture \
     && mkdir -p /data \
     && chown -R vipercapture:vipercapture /data /ms-playwright

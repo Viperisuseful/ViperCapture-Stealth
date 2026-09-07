@@ -1,10 +1,12 @@
-# Self-host ViperCapture
+# Self-host ViperCapture Stealth
 
-This repository contains the MIT-licensed rendering engine,
-browser interface, orchestration APIs, local/S3-compatible storage, schedules,
-signed delivery, diagnostics, and video. The managed ViperCapture Cloud account,
-billing, credits, referrals, deployment configuration, and production secrets
-remain separate.
+This repository is the **stealth fork** of
+[ViperCapture](https://github.com/Viperisuseful/ViperCapture). It contains the
+MIT-licensed rendering engine, browser interface, orchestration APIs,
+local/S3-compatible storage, schedules, signed delivery, diagnostics, and
+video, with Playwright replaced by Patchright Chromium. The managed
+ViperCapture Cloud account, billing, credits, referrals, deployment
+configuration, and production secrets remain separate.
 
 ## Install locally
 
@@ -14,16 +16,22 @@ and `libx264`; GPU video additionally requires the vendor encoder and driver.
 Install [uv](https://docs.astral.sh/uv/) if you can; it is the preferred
 dependency installer. Then run `python launch.py`. This is the supported setup
 and startup method. The launcher uses uv when it is on `PATH` and otherwise
-falls back to pip. It creates a virtual environment, installs Playwright
-Chromium, Firefox, and WebKit, starts the application, and opens the local
-interface. The Docker image already includes FFmpeg.
+falls back to pip. It creates a virtual environment, installs Patchright
+Chromium (`python -m patchright install chromium`), starts the application,
+and opens the local interface. Set `VIPERCAPTURE_BROWSER_CHANNEL=chrome` and
+`VIPERCAPTURE_HEADLESS=0` for headed Chrome when a display and Google Chrome
+are available. The Docker/GHCR default is headless bundled Chromium: usable
+in slim images, but weaker against bot detection than headed Chrome. The
+Docker image already includes FFmpeg. This fork does not install Firefox or
+WebKit.
 
 ## Configure a production deployment
 
 - Put hosted mode behind a rate-limited reverse proxy.
 - Run one application process. Chromium starts immediately and can grow into a
   small process pool (`VIPERCAPTURE_BROWSER_POOL_SIZE`, default about half of
-  concurrency). Firefox and WebKit still start lazily when requested.
+  concurrency). Firefox and WebKit are not supported; requests for those
+  engines return a validation error.
 - Default `VIPERCAPTURE_MAX_CONCURRENCY` is CPU-sized (2–8). Set it to `1`
   until memory and swap pressure are measured on large or full-page captures.
 - Keep the default `VIPERCAPTURE_BROWSER_RECYCLE_RENDERS=1000`; it replaces one
@@ -188,7 +196,10 @@ Custom headers are sent only to requests matching the target URL's exact
 scheme, hostname, and port. They are stripped from cross-origin subresources
 and redirects.
 
-If a Cloudflare, CDN, WAF, or origin rule blocks captures of a site you
+Patchright’s CDP patches (Runtime.enable avoidance, Console API disable,
+automation-flag tweaks, closed shadow DOM, init scripts via Routes) are
+always active. They are not a CAPTCHA solver or a custom Cloudflare exploit.
+If a Cloudflare, CDN, WAF, or origin rule still blocks captures of a site you
 administer, use the scoped pattern in [site access](site-access.md): fixed
 renderer address, exact host and path, and an origin-only secret header. It
 does not disable or evade challenges on third-party sites.

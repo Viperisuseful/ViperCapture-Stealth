@@ -29,10 +29,11 @@ are relative or unquoted. `Content-Disposition` filenames are redacted; `ETag`
 values are kept as opaque cache validators.
 `entry.time` excludes the HAR `ssl` subset of `connect`. Compressed responses
 keep `Content-Length` as transferred `bodySize` and leave decoded
-`content.size` unknown. Chromium can record HTTP versions via CDP; Firefox
-and WebKit backfill `nextHopProtocol` from Resource Timing, and HTTPS entries
-without that metadata stay `httpVersion` `unknown`.
-WebM setup/navigation frames are trimmed from the recording with Playwright's
+`content.size` unknown. Chromium records HTTP versions via CDP and backfills
+`nextHopProtocol` from Resource Timing. HTTPS entries without that metadata
+stay `httpVersion` `unknown`. Patchright disables the Console API, so
+`console.json` may be empty even when `diagnostics.include_console` is true.
+WebM setup/navigation frames are trimmed from the recording with Patchright's
 FFmpeg runtime, and `duration_ms` reports the verified encoded duration rather
 than merely echoing the request.
 
@@ -51,11 +52,10 @@ and falls back to the software encoder if the probe or the real encode fails.
 Transparent WebM and GIF remain software encoded because portable hardware
 alpha-video and GIF encoders are not available.
 
-Set `engine` to `chromium` (default), `firefox`, or `webkit`. Browsers start on
-first use and each request still receives a fresh isolated context. PDF and
-`image.optimize_for_speed` are Chromium-only; unsupported combinations fail
-validation instead of silently changing engines. WebP and AVIF on Firefox or
-WebKit are captured losslessly and converted by the bounded image pipeline.
+This stealth fork is Chromium-only. `engine` defaults to `chromium`. Requests
+for `firefox` or `webkit` fail validation with a clear error. Each request
+still receives a fresh isolated context. PDF and `image.optimize_for_speed`
+use Chromium.
 
 `profile` selects speed versus completeness defaults. `preview` (default)
 uses adaptive full-page lazy loading and Chromium's faster PNG/WebP encoder.
@@ -144,8 +144,10 @@ matter.
   after full-page lazy loading.
 - `cleanup`: consent mode and ad/tracker/chat/newsletter blocking.
 - `custom_css`: up to 64 KiB of injected CSS.
-- `stealth`: applies balanced, request-aware automation evasions by default;
-  set it to `false` for debugging or strict browser-parity tests.
+- `stealth`: uses Patchright Chromium stealth patches and optional headless
+  user-agent normalization by default. Set it to `false` to skip extra UA
+  rewriting. Patchright’s CDP patches remain active either way. This is not
+  `playwright-stealth` and is not a CAPTCHA bypass.
 - `captcha`: chooses `error` (default), `capture`, or an operator-provided
   `external` handler when a blocking challenge is detected. `solver` is a
   non-secret operator routing alias, never a provider credential.

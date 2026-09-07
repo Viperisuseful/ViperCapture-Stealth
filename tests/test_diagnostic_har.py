@@ -382,7 +382,7 @@ def test_diagnostic_bundle_manifest_and_har_match_privacy() -> None:
             "diagnostics": {
                 "bundle": True,
                 "include_har": True,
-                "include_console": False,
+                "include_console": True,
                 "include_network": True,
             },
         }
@@ -402,7 +402,9 @@ def test_diagnostic_bundle_manifest_and_har_match_privacy() -> None:
         network = json.loads(archive.read("network.json"))
     assert "access_token" not in manifest["artifact"]["metadata"]["final_url"]
     assert "allowlisted request and response header names" in manifest["privacy"]
-    assert "Firefox and WebKit" in manifest["har_completeness"]
+    assert "Chromium CDP" in manifest["har_completeness"]
+    assert "console_note" in manifest
+    assert "Patchright disables the Console API" in manifest["console_note"]
     assert "Resource Timing" in har["log"]["comment"]
     entry = har["log"]["entries"][0]
     assert entry["request"]["httpVersion"] == "HTTP/1.1"
@@ -431,8 +433,8 @@ class _Http11Handler(BaseHTTPRequestHandler):
 
 
 def test_http11_fixture_render_emits_accurate_har() -> None:
-    pytest.importorskip("playwright.async_api")
-    from playwright.async_api import async_playwright
+    pytest.importorskip("patchright.async_api")
+    from patchright.async_api import async_playwright
 
     from vipercapture.render_engine import RenderEngine
 

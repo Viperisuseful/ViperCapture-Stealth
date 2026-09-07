@@ -12,7 +12,7 @@ venv/
 env/
 *.egg-info/
 
-# Playwright browser (downloaded automatically on first run)
+# Patchright / Playwright browser (downloaded automatically on first run)
 playwright_cache/
 
 # Screenshots saved by the app
@@ -23,6 +23,7 @@ captures/
 # Launcher stamp files (generated automatically, not needed in git)
 .venv/.deps_stamp
 .venv/.playwright_stamp
+.venv/.patchright_stamp
 frontend/node_modules/
 /dist/
 

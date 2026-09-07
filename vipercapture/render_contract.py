@@ -82,8 +82,12 @@ class SideOutputFormat(str, Enum):
 
 class BrowserEngine(str, Enum):
     CHROMIUM = "chromium"
-    FIREFOX = "firefox"
-    WEBKIT = "webkit"
+
+
+UNSUPPORTED_STEALTH_ENGINES = frozenset({"firefox", "webkit"})
+CHROMIUM_ONLY_ENGINE_MESSAGE = (
+    "ViperCapture Stealth is Chromium-only; firefox and webkit are not supported"
+)
 
 
 class DevicePreset(str, Enum):
@@ -628,6 +632,15 @@ class RenderRequest(StrictModel):
     markdown: str | None = None
     base_url: HttpUrl | None = None
     engine: BrowserEngine = BrowserEngine.CHROMIUM
+
+    @field_validator("engine", mode="before")
+    @classmethod
+    def chromium_only_engine(cls, value: object) -> object:
+        raw = value.value if isinstance(value, Enum) else value
+        if isinstance(raw, str) and raw.strip().lower() in UNSUPPORTED_STEALTH_ENGINES:
+            raise ValueError(CHROMIUM_ONLY_ENGINE_MESSAGE)
+        return value
+
     output: OutputFormat = OutputFormat.PNG
     viewport: Viewport = Field(default_factory=Viewport)
     viewports: list[NamedViewport] | None = Field(
@@ -696,7 +709,10 @@ class RenderRequest(StrictModel):
     cleanup: CleanupOptions = Field(default_factory=CleanupOptions)
     stealth: bool = Field(
         default=True,
-        description="Apply balanced, request-aware browser automation evasions.",
+        description=(
+            "Use Patchright Chromium stealth patches and optional headless "
+            "user-agent normalization. Set false to skip extra UA rewriting."
+        ),
     )
     captcha: CaptchaOptions = Field(default_factory=CaptchaOptions)
     cache: bool = Field(

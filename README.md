@@ -2,24 +2,67 @@
   <img src="static/vipercapture-mark.svg" width="112" height="112" alt="ViperCapture logo">
 </p>
 
-<h1 align="center">ViperCapture</h1>
+<h1 align="center">ViperCapture Stealth</h1>
 
-<p align="center"><strong>Self-hosted browser rendering API.</strong></p>
+<p align="center"><strong>Stealth fork of ViperCapture, powered by Patchright.</strong></p>
 
-ViperCapture is an MIT-licensed browser renderer for infrastructure you control.
-Send a URL, HTML, or Markdown and receive screenshots,
-PDFs, AVIF images, WebM/MP4/GIF video, hydrated HTML, Markdown, or structured
+This is the **stealth fork** of [ViperCapture](https://github.com/Viperisuseful/ViperCapture)
+(OSS 1.0.3). It keeps the same `/v1/render` JSON contract and logo assets, but
+replaces Playwright with [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-python),
+a Chromium-only Playwright drop-in that patches CDP leaks used by Cloudflare
+and other WAFs.
+
+- Upstream OSS: https://github.com/Viperisuseful/ViperCapture
+- This fork: https://github.com/Viperisuseful/ViperCapture-Stealth
+- Published image: `ghcr.io/viperisuseful/vipercapture-stealth`
+
+The product version stays **1.0.3** to match the upstream contract line. Fork
+identity lives in the product name, image, and this README—not a confusing
+version scheme.
+
+ViperCapture Stealth is an MIT-licensed browser renderer for infrastructure
+you control. Send a URL, HTML, or Markdown and receive screenshots, PDFs,
+AVIF images, WebM/MP4/GIF video, hydrated HTML, Markdown, or structured
 metadata through a JSON API.
 
-Version 1.0 is the first stable release. The documented JSON contract follows
-semantic versioning; breaking API changes require a new major version. If you
-are moving from another rendering service, start with the
-[compatibility matrix](docs/compatibility.md) and
-[migration guide](docs/migration-screenshotone-urlbox.md).
+## Stealth, Cloudflare, and WAF
+
+Stealth comes from **Patchright’s supported surface**, not custom exploits:
+
+- Avoids Playwright’s `Runtime.enable` leak by evaluating JavaScript in
+  isolated execution contexts
+- Disables the Console API to avoid `Console.enable` leaks (diagnostic
+  `console.json` may be empty)
+- Tweaks automation flags (`--disable-blink-features=AutomationControlled`,
+  removes `--enable-automation` and other detectable defaults)
+- Interacts with closed shadow DOM through normal locators
+- Injects init scripts via Playwright Routes instead of `Runtime.enable`
+
+This fork does **not** ship CAPTCHA solvers, Cloudflare challenge bypasses, or
+`playwright-stealth` stacked on Patchright. Detected challenges still return
+`captcha_detected` unless you opt into `proceed_on_captcha` (capture as shown)
+or an operator-approved external handler. For sites you administer, keep using
+the least-privilege [Cloudflare/WAF authorization guide](docs/site-access.md).
+
+### Headed Chrome vs headless Docker
+
+Patchright’s strongest setup is **headed Google Chrome**
+(`channel="chrome"`, `headless=False`). Headless Chromium in slim images is
+weaker and more detectable. The GHCR/Docker default still uses **headless
+bundled Chromium** so `ghcr.io/viperisuseful/vipercapture-stealth` is usable
+without a display or system Chrome.
+
+| Knob | Default | Notes |
+| --- | --- | --- |
+| `VIPERCAPTURE_BROWSER_CHANNEL` | `chromium` | Set `chrome` when Google Chrome is installed (`patchright install chrome`) |
+| `VIPERCAPTURE_HEADLESS` | `1` | Set `0` for headed mode when a display is available |
+
+This fork is **Chromium-only**. Requests with `engine: "firefox"` or
+`"webkit"` are rejected. Firefox and WebKit are not installed.
 
 ## Features
 
-- Chromium, Firefox, and WebKit rendering; browsers start only when needed
+- Patchright Chromium rendering (Firefox/WebKit are not supported in this fork)
 - PNG, JPEG, WebP, AVIF, PDF with explicit structure-tag control, HTML,
   Markdown, metadata with structured CSS-selector extraction, and WebM/MP4/GIF
   output
@@ -32,7 +75,7 @@ are moving from another rendering service, start with the
 - Selector-state and image-readiness waits, target JavaScript control,
   assertions, custom CSS, devices, locale/timezone,
   geolocation, cookies, user agent, proxy, resource blocking, and cleanup
-- Request-aware stealth controls, operator-controlled residential/datacenter
+- Patchright CDP stealth, operator-controlled residential/datacenter
   proxies, and structured detection for common CAPTCHA and bot interstitials
 - Ad, tracker, chat, newsletter, and consent-banner cleanup backed by the
   vendored, license-preserved AutoConsent rule set
@@ -50,9 +93,10 @@ are moving from another rendering service, start with the
 - Expiring HMAC-signed render URLs and a 24-hour exact-request image cache
 - Visual regression ZIPs with pixel counts, pass/fail thresholds, bounds, and
   highlighted changes
-- Diagnostic ZIPs with console/network data and optional redacted HAR
+- Diagnostic ZIPs with optional console/network data and redacted HAR
   (HTTP versions, safe headers, mime types, timings),
-  redacted Playwright trace, and WARC; Ed25519-certified artifact bundles
+  redacted Patchright trace, and WARC; Ed25519-certified artifact bundles.
+  Console capture is degraded because Patchright disables the Console API.
 - Deterministic capture controls, sectioned slice ZIPs, project-owned visual
   baselines, and reproducible comparison reports
 - Optional projects, hashed API keys, quotas, resource ownership, encrypted
@@ -91,16 +135,18 @@ On Windows, use `irm https://astral.sh/uv/install.ps1 | iex` in PowerShell.
 Then run:
 
 ```bash
-git clone https://github.com/Viperisuseful/ViperCapture.git
-cd ViperCapture
+git clone https://github.com/Viperisuseful/ViperCapture-Stealth.git
+cd ViperCapture-Stealth
 python launch.py
 ```
 
 The launcher prefers uv when it is on `PATH`: it creates `.venv` and installs
 from `requirements.txt`. If uv is missing, it falls back to the standard
 library `venv` module and pip. Set `VIPERCAPTURE_USE_UV=0` to force that pip
-path even when uv is installed. The launcher then installs Chromium, Firefox,
-and WebKit, starts the API, and opens `http://127.0.0.1:8000`.
+path even when uv is installed. The launcher then installs Patchright
+Chromium, starts the API, and opens `http://127.0.0.1:8000`. Set
+`VIPERCAPTURE_BROWSER_CHANNEL=chrome` and `VIPERCAPTURE_HEADLESS=0` before
+`python launch.py` when you want headed Chrome.
 
 To use Docker instead, run:
 
@@ -111,8 +157,11 @@ docker compose up --build
 Stable container images are also published to GitHub Container Registry:
 
 ```bash
-docker pull ghcr.io/viperisuseful/vipercapture:1.0.3
+docker pull ghcr.io/viperisuseful/vipercapture-stealth:1.0.3
 ```
+
+The image defaults to headless bundled Chromium. That is weaker than headed
+Chrome but keeps GHCR usable on servers without a display.
 
 By default, Compose binds only to loopback. It keeps durable queue state,
 encryption keys, schedules, cache entries, and local artifacts in a named
@@ -191,15 +240,15 @@ pasted Cookie header into an encrypted profile. Pass its returned `id` as
 `profile_id` on later renders. Imports preserve local storage and partitioned
 cookies where the export format supports them.
 
-ViperCapture detects common blocking CAPTCHA and bot interstitials but does not
-solve or bypass them. The default `captcha.action` is `error`; use `capture` to
-render the challenge as-is. Operators may configure their own approved async
-handler with `VIPERCAPTURE_CAPTCHA_HANDLER_FACTORY` and opt in per request with
-`captcha.action: "external"`. See the [API guide](docs/api.md) for the handler
-contract and timeout behavior. Alternatively, an authorized caller can use an
-external tool independently, then start a fresh render with short-lived,
-target-scoped session state. ViperCapture ships no provider integration,
-credentials, endorsement, solver, or bypass service.
+ViperCapture Stealth detects common blocking CAPTCHA and bot interstitials but
+does not solve or bypass them. The default `captcha.action` is `error`; use
+`capture` to render the challenge as-is. Operators may configure their own
+approved async handler with `VIPERCAPTURE_CAPTCHA_HANDLER_FACTORY` and opt in
+per request with `captcha.action: "external"`. See the [API guide](docs/api.md)
+for the handler contract and timeout behavior. Alternatively, an authorized
+caller can use an external tool independently, then start a fresh render with
+short-lived, target-scoped session state. This fork ships no provider
+integration, credentials, endorsement, solver, or bypass service.
 
 ## Configure storage and webhooks
 
@@ -245,24 +294,32 @@ artifacts accordingly.
 ```bash
 uv venv
 uv pip install -r requirements.txt
-.venv/bin/python -m playwright install --with-deps chromium firefox webkit
+.venv/bin/python -m patchright install --with-deps chromium
 npm ci --prefix frontend && npm run lint --prefix frontend && npm run build --prefix frontend
 .venv/bin/python scripts/smoke.py
 ```
 
 Without uv, use `python -m venv .venv` and
 `.venv/bin/python -m pip install -r requirements.txt` instead, then the same
-Playwright, frontend, and smoke commands. On Windows, use
+Patchright, frontend, and smoke commands. On Windows, use
 `.venv\Scripts\python -m pip install -r requirements.txt` and
-`.venv\Scripts\python` for Playwright and smoke, and omit `--with-deps` from
-the Playwright command. On macOS, omit `--with-deps`.
+`.venv\Scripts\python` for Patchright and smoke, and omit `--with-deps` from
+the Patchright command. On macOS, omit `--with-deps`.
 The smoke command starts a temporary local server and verifies Chromium,
-Firefox, WebKit, OpenAPI, health, and output dimensions. Pass
+OpenAPI, health, output dimensions, and that Firefox/WebKit are rejected. Pass
 `--base-url http://host:port` to check an existing deployment instead. For an
 authenticated deployment, set `VIPERCAPTURE_SMOKE_TOKEN` to an API or
 administrator token.
 
+For headed Chrome on a workstation:
+
+```bash
+VIPERCAPTURE_BROWSER_CHANNEL=chrome VIPERCAPTURE_HEADLESS=0 \
+  .venv/bin/python -m patchright install chrome
+```
+
 ## License
 
 [MIT](LICENSE). AutoConsent assets under `vendor/autoconsent` retain their
-upstream license and attribution.
+upstream license and attribution. Patchright is Apache-2.0 and remains a
+separate dependency.

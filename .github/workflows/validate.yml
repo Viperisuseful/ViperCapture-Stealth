@@ -70,7 +70,7 @@ jobs:
       - name: Install renderer and browsers
         run: |
           uv pip install --system -r requirements.txt
-          python -m playwright install chromium firefox webkit
+          python -m patchright install chromium
       - name: Install frontend
         run: npm ci --prefix frontend
       - name: Check Python and render engines

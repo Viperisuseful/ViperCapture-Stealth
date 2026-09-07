@@ -199,8 +199,8 @@ const providerNames: Record<string, string> = {
   datadome: "DataDome",
   unknown: "A page-level CAPTCHA",
 }
-const docsUrl = "https://github.com/Viperisuseful/ViperCapture/blob/master/docs/self-hosting.md"
-const siteAccessUrl = "https://github.com/Viperisuseful/ViperCapture/blob/master/docs/site-access.md"
+const docsUrl = "https://github.com/Viperisuseful/ViperCapture-Stealth/blob/master/docs/self-hosting.md"
+const siteAccessUrl = "https://github.com/Viperisuseful/ViperCapture-Stealth/blob/master/docs/site-access.md"
 const blockedHeaderNames = new Set([
   "connection", "content-length", "forwarded", "host", "keep-alive",
   "proxy-authenticate", "proxy-authorization", "te", "trailer",
@@ -762,15 +762,15 @@ export default function App() {
         <div className="site-shell flex h-16 items-center justify-between">
           <a href="/" className="flex items-center gap-2 font-semibold tracking-tight">
             <img src="/static/vipercapture-mark.svg" alt="" className="size-8 rounded-lg" />
-            ViperCapture
-            <Badge variant="secondary" className="hidden sm:inline-flex">Open source</Badge>
+            ViperCapture Stealth
+            <Badge variant="secondary" className="hidden sm:inline-flex">Stealth fork</Badge>
           </a>
           <nav className="flex items-center gap-1">
             <Button variant="ghost" size="icon-sm" onClick={() => setDark((value) => !value)} aria-label="Toggle color theme">
               {dark ? <Sun /> : <Moon />}
             </Button>
             <Button variant="ghost" size="sm" asChild>
-              <a href="https://github.com/Viperisuseful/ViperCapture" target="_blank" rel="noreferrer">
+              <a href="https://github.com/Viperisuseful/ViperCapture-Stealth" target="_blank" rel="noreferrer">
                 <Code2 data-icon="inline-start" />
                 <span className="hidden sm:inline">GitHub</span>
               </a>
@@ -780,7 +780,7 @@ export default function App() {
       </header>
 
       <main className="site-shell py-10 sm:py-14">
-        <h1 className="sr-only">ViperCapture</h1>
+        <h1 className="sr-only">ViperCapture Stealth</h1>
         <section className="hairline-panel overflow-hidden">
           <div className="flex flex-col gap-4 border-b bg-card p-4 lg:flex-row lg:items-end">
             <Field className="min-w-0 flex-1">
@@ -1047,7 +1047,7 @@ export default function App() {
                     </CardFooter>
                   </Card>
                 ) : latest && latest.type.startsWith("image/") ? (
-                  <img src={latest.url} alt="Latest ViperCapture result" className="max-h-[580px] max-w-full rounded-lg border bg-background object-contain shadow-xl" />
+                  <img src={latest.url} alt="Latest ViperCapture Stealth result" className="max-h-[580px] max-w-full rounded-lg border bg-background object-contain shadow-xl" />
                 ) : latest ? (
                   <div className="max-w-sm text-center"><div className="mx-auto flex size-12 items-center justify-center rounded-xl border bg-background"><Download className="size-5 text-muted-foreground" /></div><p className="mt-4 font-medium">{latest.name}</p><p className="mt-1 text-sm leading-6 text-muted-foreground">This output is ready to open or download below.</p></div>
                 ) : (
@@ -1098,7 +1098,7 @@ export default function App() {
             <AlertTriangle />
             <AlertDialogTitle>CAPTCHA detected</AlertDialogTitle>
             <AlertDialogDescription>
-              {captchaWarning?.provider} is blocking the page. You can capture the visible challenge, but ViperCapture will not solve or bypass it.
+              {captchaWarning?.provider} is blocking the page. You can capture the visible challenge, but ViperCapture Stealth will not solve or bypass it.
               {captchaWarning?.requestId ? ` Request ${captchaWarning.requestId}.` : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>
