@@ -34,8 +34,10 @@ that as a challenge, not a product failure you can “bypass.”
 **When it works:** public test-key widgets (nowsecure.nl) and closed-shadow
 managed pages with a clickable checkbox (scrapingcourse in A/B) on
 **persistent headed Chrome**. **When it will not:** interactive hard
-challenges, many production widgets, and headless Docker/GHCR. Neither A/B
-result is a general Cloudflare bypass.
+challenges and many production widgets. Headless Docker/GHCR is weaker and
+less reliable than headed Chrome, but the same complete-when-possible path
+still runs (no headless or channel guard). Neither A/B result is a general
+Cloudflare bypass.
 
 ## Create an access rule
 
@@ -120,9 +122,10 @@ rate limits and security middleware too.
 - Interactive Turnstile without a clickable checkbox still cannot complete
   without a solver or a human. nowsecure.nl’s test-key widget and
   scrapingcourse-style closed-shadow frames can complete when locators see
-  the checkbox on headed persistent Chrome; many production widgets and
-  headless Docker/GHCR will not. That is inherent challenge handling, not a
-  Stealth “bypass.”
+  the checkbox on headed persistent Chrome; many production widgets will
+  not. Headless Docker/GHCR is weaker and less reliable, not disabled — the
+  click path still runs if a locator can reach the checkbox. That is
+  inherent challenge handling, not a Stealth “bypass.”
 - A 403 from the original navigation is ignored once the page shows a Turnstile
   token, success UI, or real-content bypass copy. Do not treat a stale 403 as
   proof the challenge is still up.

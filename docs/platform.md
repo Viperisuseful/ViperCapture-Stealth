@@ -141,8 +141,9 @@ retries with backoff. Mere `embedded_widget` presence is not a pass. A stale
 navigation 403 is ignored after those markers. The auto-pass `stop_when`
 probe binds `page` (#6 TypeError hotfix). This is challenge handling, not a
 Cloudflare bypass. Public test widgets (nowsecure / scrapingcourse) can
-complete on persistent headed Chrome; interactive hard challenges, many
-production widgets, and headless Docker/GHCR often will not. A human or a
+complete on persistent headed Chrome; interactive hard challenges and many
+production widgets often will not. Headless Docker/GHCR is weaker and less
+reliable, but the click path is not gated off. A human or a
 site-owner allowlist remains the supported path for sites you administer.
 See the README [Stealth mode / Patchright](../README.md#stealth-mode--patchright)
 section for install, env knobs, and the sweet-spot quickstart.
