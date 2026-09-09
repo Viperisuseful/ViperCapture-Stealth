@@ -46,6 +46,20 @@ python -m venv .venv
 
 On Windows, use `.venv\Scripts\python -m pip install -r requirements.txt`.
 
+On Intel macOS, `cryptography>=50` has no PyPI wheel (PyCA dropped x86_64 /
+universal2 wheels in 49.0.0; [GHSA-jwv3-5hgf-82ww](https://github.com/advisories/GHSA-jwv3-5hgf-82ww)
+forbids staying on 48.x). Install official build tools before `python launch.py`
+or a manual pip/uv install:
+
+```bash
+xcode-select --install
+brew install openssl@3 rust
+```
+
+The launcher preflights those tools and exits with the same commands if they
+are missing. See [cryptography installation](https://cryptography.io/en/latest/installation/).
+Apple Silicon does not need this toolchain.
+
 ## Prepare a change
 
 Keep the pull request limited to one change. Include:

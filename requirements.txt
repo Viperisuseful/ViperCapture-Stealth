@@ -2,9 +2,12 @@ fastapi>=0.141.1
 uvicorn[standard]>=0.52.1
 patchright>=1.62.0,<1.63
 python-multipart>=0.0.9
-# GHSA-jwv3-5hgf-82ww is patched in 49.0.0. Keep the existing >=50 floor on every
-# platform, including Intel macOS (cryptography 49 dropped published x86_64 wheels,
-# so those hosts install from sdist).
+# GHSA-jwv3-5hgf-82ww is patched in 49.0.0 (affected >=42.0.0, <=48.0.0).
+# Keep >=50.0.0 on every platform. No patched PyPI release ships a darwin
+# x86_64 or universal2 wheel (49.0.0 / 50.0.0 / 50.0.1 are macosx_11_0_arm64
+# only). 48.x still has universal2 wheels but is <=48 and must not be used.
+# Intel Macs build the official sdist; launch.py preflights Rust 1.83+,
+# OpenSSL 3, and a C compiler. See https://cryptography.io/en/latest/installation/
 cryptography>=50.0.0
 httpx>=0.28.1
 markdown-it-py>=4.0.0

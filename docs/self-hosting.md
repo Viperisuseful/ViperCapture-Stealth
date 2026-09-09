@@ -19,6 +19,15 @@ and startup method. The launcher uses uv when it is on `PATH` and otherwise
 falls back to pip. It creates a virtual environment, installs Patchright
 browsers, starts the application, and opens the local interface.
 
+On Intel macOS, `cryptography>=50` must be built from the official sdist: PyPI
+has no x86_64 or universal2 wheel for patched 49+ releases, and 48.x wheels
+are still in the [GHSA-jwv3-5hgf-82ww](https://github.com/advisories/GHSA-jwv3-5hgf-82ww)
+range. Install Xcode Command Line Tools, Rust 1.83+, and OpenSSL 3 first
+(`xcode-select --install` and `brew install openssl@3 rust`). The launcher
+preflights those tools and prints the same commands if they are missing
+instead of failing inside pip. Apple Silicon uses the arm64 wheel. See
+[cryptography installation](https://cryptography.io/en/latest/installation/).
+
 Install Chrome and/or Chromium yourself when you are not using the launcher:
 
 ```bash
