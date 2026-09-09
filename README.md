@@ -318,6 +318,29 @@ sweet spot, set `VIPERCAPTURE_PATCHRIGHT_SWEETSPOT=1` (or
 `VIPERCAPTURE_BROWSER_CHANNEL=chrome` and `VIPERCAPTURE_HEADLESS=0`) before
 `python launch.py`.
 
+**Intel macOS (x86_64).** PyPI does not publish Intel or universal2 wheels for
+`cryptography` 49+ ([changelog](https://cryptography.io/en/latest/changelog/#v49-0-0);
+[49.0.0 files](https://pypi.org/project/cryptography/49.0.0/#files),
+[50.0.1 files](https://pypi.org/project/cryptography/50.0.1/#files) are
+`macosx_11_0_arm64` only). [GHSA-jwv3-5hgf-82ww](https://github.com/advisories/GHSA-jwv3-5hgf-82ww)
+is patched in 49.0.0; 48.x still has universal2 wheels but must not be used.
+This project keeps `cryptography>=50.0.0` on every platform. On Intel Macs,
+`python launch.py` builds that release from the official sdist after checking
+for Xcode Command Line Tools, Rust 1.83+, and OpenSSL 3 (not Apple LibreSSL).
+If those tools are missing, the launcher exits with install commands instead of
+failing inside pip/uv:
+
+```bash
+xcode-select --install
+brew install openssl@3 rust
+python launch.py
+```
+
+Rust can also come from [rustup](https://rustup.rs). PyCA source-build docs:
+[cryptography installation](https://cryptography.io/en/latest/installation/).
+Apple Silicon Macs use the arm64 wheel and do not need this toolchain. Do not
+install unofficial wheels.
+
 To use Docker instead, run:
 
 ```bash
