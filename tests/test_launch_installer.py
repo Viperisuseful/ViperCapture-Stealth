@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from typing import Callable
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -83,6 +86,17 @@ class InstallerCommandTests(unittest.TestCase):
             ],
         )
 
+    def test_deps_force_cryptography_sdist_on_intel_macos(self) -> None:
+        requirements = Path("/app/requirements.txt")
+        uv_commands = launch.deps_commands(
+            "/venv/bin/python", requirements, "/opt/uv", intel_macos=True
+        )
+        pip_commands = launch.deps_commands(
+            "/venv/bin/python", requirements, None, intel_macos=True
+        )
+        self.assertEqual(uv_commands[0][0][-2:], ["--no-binary", "cryptography"])
+        self.assertEqual(pip_commands[1][0][-2:], ["--no-binary", "cryptography"])
+
     def test_patchright_installs_chromium_by_default(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("VIPERCAPTURE_BROWSER_CHANNEL", None)
@@ -139,6 +153,8 @@ class IntelMacosCryptographyTests(unittest.TestCase):
             self.skipTest("this job is Intel macOS")
         self.assertFalse(launch.is_intel_macos())
         self.assertIsNone(launch.prepare_intel_macos_cryptography_install())
+
+    def test_is_intel_macos_only_for_darwin_x86(self) -> None:
         self.assertTrue(launch.is_intel_macos(system="darwin", machine="x86_64"))
         self.assertTrue(launch.is_intel_macos(system="darwin", machine="X86_64"))
         self.assertTrue(launch.is_intel_macos(system="darwin", machine="amd64"))
@@ -158,10 +174,69 @@ class IntelMacosCryptographyTests(unittest.TestCase):
             launch.parse_rustc_version("rustc 1.83.0"), launch.CRYPTOGRAPHY_MIN_RUST
         )
 
+    def _openssl_prefix(self, root: Path) -> str:
+        include = root / "include" / "openssl"
+        include.mkdir(parents=True)
+        (include / "ssl.h").write_text("/* test */\n", encoding="utf-8")
+        (include / "opensslv.h").write_text(
+            "# define OPENSSL_VERSION_MAJOR  3\n"
+            "# define OPENSSL_VERSION_MINOR  5\n",
+            encoding="utf-8",
+        )
+        lib = root / "lib" / "pkgconfig"
+        lib.mkdir(parents=True)
+        (root / "lib" / "libcrypto.dylib").write_bytes(b"")
+        (root / "lib" / "libssl.dylib").write_bytes(b"")
+        return str(root)
+
+    def _ready_which(self, **extra: str) -> Callable[[str], str | None]:
+        mapping = {
+            "cc": "/usr/bin/cc",
+            "rustc": "/usr/local/bin/rustc",
+            "cargo": "/usr/local/bin/cargo",
+            "brew": "/usr/local/bin/brew",
+            **extra,
+        }
+
+        def which(name: str) -> str | None:
+            return mapping.get(name)
+
+        return which
+
+    def _ready_run(self, openssl_prefix: str | None = None):
+        def run(cmd, **_kwargs):
+            if cmd[:2] == ["/usr/bin/cc", "-v"]:
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout="", stderr="Apple clang version 17.0.0\n"
+                )
+            if cmd[:2] == ["/usr/local/bin/rustc", "--version"]:
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout="rustc 1.85.0 (hash)\n", stderr=""
+                )
+            if cmd[:2] == ["/usr/local/bin/cargo", "--version"]:
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout="cargo 1.85.0 (hash)\n", stderr=""
+                )
+            if (
+                openssl_prefix
+                and cmd[:3] == ["/usr/local/bin/brew", "--prefix", "openssl@3"]
+            ):
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout=openssl_prefix + "\n", stderr=""
+                )
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+
+        return run
+
     def test_preflight_reports_missing_compiler_rust_and_openssl(self) -> None:
-        with mock.patch("launch.shutil.which", return_value=None):
-            with mock.patch.object(launch, "intel_macos_openssl_ready", return_value=False):
-                issues = launch.intel_macos_cryptography_issues()
+        toolchain = launch.probe_intel_macos_cryptography_toolchain(
+            which=lambda _name: None,
+            run=lambda *_args, **_kwargs: subprocess.CompletedProcess(
+                [], 1, stdout="", stderr=""
+            ),
+            environ={},
+        )
+        issues = launch.intel_macos_cryptography_missing(toolchain)
         joined = " ".join(issues)
         self.assertEqual(len(issues), 3)
         self.assertIn("xcode-select --install", joined)
@@ -170,45 +245,134 @@ class IntelMacosCryptographyTests(unittest.TestCase):
         self.assertIn(launch.PYCA_INSTALL_DOCS, joined)
 
     def test_preflight_rejects_old_rustc(self) -> None:
-        def which(name: str) -> str | None:
-            return f"/usr/bin/{name}" if name in {"cc", "rustc", "cargo"} else None
+        def run(cmd, **_kwargs):
+            if cmd[:2] == ["/usr/bin/cc", "-v"]:
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout="", stderr="Apple clang version 17.0.0\n"
+                )
+            if cmd[:2] == ["/usr/bin/rustc", "--version"]:
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout="rustc 1.74.0\n", stderr=""
+                )
+            if cmd[:2] == ["/usr/bin/cargo", "--version"]:
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout="cargo 1.74.0\n", stderr=""
+                )
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
 
-        with mock.patch("launch.shutil.which", side_effect=which):
-            with mock.patch.object(launch, "_command_output", return_value="rustc 1.74.0"):
-                with mock.patch.object(launch, "intel_macos_openssl_ready", return_value=True):
-                    issues = launch.intel_macos_cryptography_issues()
-        self.assertEqual(len(issues), 1)
-        self.assertIn("1.83.0", issues[0])
-        self.assertIn("1.74.0", issues[0])
+        issues = launch.intel_macos_cryptography_issues(
+            which=lambda name: {
+                "cc": "/usr/bin/cc",
+                "rustc": "/usr/bin/rustc",
+                "cargo": "/usr/bin/cargo",
+            }.get(name),
+            run=run,
+            environ={},
+        )
+        self.assertTrue(any("Rust 1.83.0+" in issue for issue in issues))
 
     def test_preflight_passes_when_toolchain_present(self) -> None:
-        def which(name: str) -> str | None:
-            return f"/usr/bin/{name}" if name in {"cc", "rustc", "cargo"} else None
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = self._openssl_prefix(Path(tmp) / "openssl@3")
+            issues = launch.intel_macos_cryptography_issues(
+                which=self._ready_which(),
+                run=self._ready_run(prefix),
+                environ={},
+            )
+            self.assertEqual(issues, [])
 
-        with mock.patch("launch.shutil.which", side_effect=which):
-            with mock.patch.object(
-                launch, "_command_output", return_value="rustc 1.83.0 (abc 2026-01-01)"
-            ):
-                with mock.patch.object(launch, "intel_macos_openssl_ready", return_value=True):
-                    self.assertEqual(launch.intel_macos_cryptography_issues(), [])
+    def test_rejects_compiler_stub_that_cannot_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = self._openssl_prefix(Path(tmp) / "openssl@3")
 
-    def test_openssl_ready_uses_openssl_dir(self) -> None:
-        with mock.patch.dict(os.environ, {"OPENSSL_DIR": "/opt/openssl@3"}, clear=False):
-            with mock.patch.object(launch, "openssl_headers_present", return_value=True):
-                self.assertTrue(launch.intel_macos_openssl_ready())
+            def run(cmd, **_kwargs):
+                if cmd[:2] == ["/usr/bin/cc", "-v"]:
+                    return subprocess.CompletedProcess(
+                        cmd,
+                        1,
+                        stdout="",
+                        stderr="xcode-select: note: no developer tools were found\n",
+                    )
+                return self._ready_run(prefix)(cmd)
+
+            issues = launch.intel_macos_cryptography_issues(
+                which=self._ready_which(),
+                run=run,
+                environ={},
+            )
+            self.assertTrue(any("xcode-select --install" in issue for issue in issues))
+
+    def test_rejects_rustc_without_cargo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = self._openssl_prefix(Path(tmp) / "openssl@3")
+            mapping = {
+                "cc": "/usr/bin/cc",
+                "rustc": "/usr/local/bin/rustc",
+                "brew": "/usr/local/bin/brew",
+            }
+            issues = launch.intel_macos_cryptography_issues(
+                which=lambda name: mapping.get(name),
+                run=self._ready_run(prefix),
+                environ={},
+            )
+            self.assertTrue(any("rustc and cargo" in issue for issue in issues))
+
+    def test_skips_header_only_openssl_and_uses_brew(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stale = Path(tmp) / "stale"
+            (stale / "include" / "openssl").mkdir(parents=True)
+            (stale / "include" / "openssl" / "ssl.h").write_text(
+                "/* headers only */\n", encoding="utf-8"
+            )
+            brew_prefix = self._openssl_prefix(Path(tmp) / "openssl@3")
+            environ = {"OPENSSL_DIR": str(stale)}
+            extra = launch.intel_macos_cryptography_build_env(
+                which=self._ready_which(),
+                run=self._ready_run(brew_prefix),
+                environ=environ,
+            )
+            self.assertEqual(extra["OPENSSL_DIR"], brew_prefix)
+
+    def test_rejects_libressl_prefix(self) -> None:
+        self.assertFalse(
+            launch.openssl_headers_are_usable(
+                "# define LIBRESSL_VERSION_NUMBER 0x40000000L\n"
+                "# define OPENSSL_VERSION_NUMBER  0x20000000L\n"
+            )
+        )
+        self.assertTrue(
+            launch.openssl_headers_are_usable("# define OPENSSL_VERSION_MAJOR  3\n")
+        )
+        self.assertFalse(
+            launch.openssl_headers_are_usable(
+                "# define OPENSSL_VERSION_NUMBER  0x101010cfL\n"
+            )
+        )
+
+    def test_openssl_ready_uses_validated_openssl_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = self._openssl_prefix(Path(tmp) / "openssl@3")
+            toolchain = launch.probe_intel_macos_cryptography_toolchain(
+                which=lambda _name: None,
+                run=lambda *_args, **_kwargs: subprocess.CompletedProcess(
+                    [], 1, stdout="", stderr=""
+                ),
+                environ={"OPENSSL_DIR": prefix},
+            )
+            self.assertEqual(toolchain["openssl_dir"], prefix)
 
     def test_build_env_sets_homebrew_openssl_dir(self) -> None:
-        with mock.patch.dict(os.environ, {"OPENSSL_DIR": ""}, clear=False):
-            os.environ.pop("OPENSSL_DIR", None)
-            os.environ.pop("PKG_CONFIG_PATH", None)
-            with mock.patch.object(
-                launch, "homebrew_openssl3_prefix", return_value="/usr/local/opt/openssl@3"
-            ):
-                env = launch.intel_macos_cryptography_build_env()
-        self.assertEqual(env["OPENSSL_DIR"], "/usr/local/opt/openssl@3")
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = self._openssl_prefix(Path(tmp) / "openssl@3")
+            extra = launch.intel_macos_cryptography_build_env(
+                which=self._ready_which(),
+                run=self._ready_run(prefix),
+                environ={},
+            )
+        self.assertEqual(extra["OPENSSL_DIR"], prefix)
         self.assertEqual(
-            env["PKG_CONFIG_PATH"],
-            "/usr/local/opt/openssl@3/lib/pkgconfig",
+            extra["PKG_CONFIG_PATH"],
+            str(Path(prefix) / "lib" / "pkgconfig"),
         )
 
     def test_error_lines_are_actionable_and_forbid_vulnerable_wheels(self) -> None:
@@ -228,21 +392,32 @@ class IntelMacosCryptographyTests(unittest.TestCase):
     def test_prepare_exits_when_toolchain_missing(self) -> None:
         with mock.patch.object(launch, "is_intel_macos", return_value=True):
             with mock.patch.object(
-                launch, "intel_macos_cryptography_issues", return_value=["Rust 1.83.0+"]
+                launch, "intel_macos_cryptography_missing", return_value=["Rust 1.83.0+"]
             ):
-                with mock.patch.object(launch, "wait_and_exit", side_effect=SystemExit(1)) as exit_fn:
-                    with self.assertRaises(SystemExit):
-                        launch.prepare_intel_macos_cryptography_install()
-                    exit_fn.assert_called_once_with(1)
+                with mock.patch.object(
+                    launch,
+                    "probe_intel_macos_cryptography_toolchain",
+                    return_value={},
+                ):
+                    with mock.patch.object(
+                        launch, "wait_and_exit", side_effect=SystemExit(1)
+                    ) as exit_fn:
+                        with self.assertRaises(SystemExit):
+                            launch.prepare_intel_macos_cryptography_install()
+                        exit_fn.assert_called_once_with(1)
 
     def test_prepare_returns_build_env_when_ready(self) -> None:
-        extra = {"OPENSSL_DIR": "/usr/local/opt/openssl@3"}
-        with mock.patch.object(launch, "is_intel_macos", return_value=True):
-            with mock.patch.object(launch, "intel_macos_cryptography_issues", return_value=[]):
-                with mock.patch.object(
-                    launch, "intel_macos_cryptography_build_env", return_value=extra
-                ):
-                    self.assertEqual(launch.prepare_intel_macos_cryptography_install(), extra)
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = self._openssl_prefix(Path(tmp) / "openssl@3")
+            with mock.patch.object(launch, "is_intel_macos", return_value=True):
+                extra = launch.prepare_intel_macos_cryptography_install(
+                    which=self._ready_which(),
+                    run=self._ready_run(prefix),
+                    environ={},
+                )
+        self.assertIsNotNone(extra)
+        assert extra is not None
+        self.assertEqual(extra["OPENSSL_DIR"], prefix)
 
     def test_ensure_deps_preflight_before_install_on_intel_macos(self) -> None:
         with mock.patch.object(launch, "DEPS_STAMP") as stamp:
@@ -250,14 +425,21 @@ class IntelMacosCryptographyTests(unittest.TestCase):
             with mock.patch.object(launch, "_req_hash", return_value="abc"):
                 with mock.patch.object(launch, "is_intel_macos", return_value=True):
                     with mock.patch.object(
-                        launch, "intel_macos_cryptography_issues", return_value=["Rust"]
+                        launch,
+                        "probe_intel_macos_cryptography_toolchain",
+                        return_value={},
                     ):
                         with mock.patch.object(
-                            launch, "wait_and_exit", side_effect=SystemExit(1)
-                        ) as exit_fn:
-                            with mock.patch.object(launch, "run") as run:
-                                with self.assertRaises(SystemExit):
-                                    launch.ensure_deps()
+                            launch,
+                            "intel_macos_cryptography_missing",
+                            return_value=["Rust"],
+                        ):
+                            with mock.patch.object(
+                                launch, "wait_and_exit", side_effect=SystemExit(1)
+                            ) as exit_fn:
+                                with mock.patch.object(launch, "run") as run:
+                                    with self.assertRaises(SystemExit):
+                                        launch.ensure_deps()
         exit_fn.assert_called_once_with(1)
         run.assert_not_called()
 

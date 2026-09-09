@@ -31,6 +31,7 @@ import socket
 import time
 import webbrowser
 from pathlib import Path
+from typing import Callable
 
 ROOT             = Path(__file__).parent.resolve()
 VENV_PYTHON      = ROOT / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
@@ -132,98 +133,243 @@ def parse_rustc_version(output: str) -> tuple[int, int, int] | None:
     return int(match.group(1)), int(match.group(2)), int(match.group(3))
 
 
-def _command_output(command: list[str]) -> str | None:
+def _run_command(
+    cmd: list[str],
+    run: Callable[..., subprocess.CompletedProcess[str]],
+    timeout: int = 15,
+) -> subprocess.CompletedProcess[str] | None:
     try:
-        result = subprocess.run(
-            command,
+        return run(
+            cmd,
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=timeout,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
-    if result.returncode != 0:
+
+
+def _command_stdout(
+    cmd: list[str],
+    run: Callable[..., subprocess.CompletedProcess[str]],
+) -> str | None:
+    result = _run_command(cmd, run)
+    if result is None or result.returncode != 0:
         return None
-    return f"{result.stdout or ''}{result.stderr or ''}"
+    return (result.stdout or "").strip()
 
 
-def openssl_headers_present(root: str) -> bool:
-    return Path(root, "include", "openssl").is_dir()
+def _command_succeeded(
+    cmd: list[str],
+    run: Callable[..., subprocess.CompletedProcess[str]],
+    *,
+    needles: tuple[str, ...] = (),
+) -> bool:
+    result = _run_command(cmd, run)
+    if result is None or result.returncode != 0:
+        return False
+    if not needles:
+        return True
+    text = f"{result.stdout or ''}{result.stderr or ''}".lower()
+    return any(needle.lower() in text for needle in needles)
 
 
-def homebrew_openssl3_prefix() -> str | None:
-    brew = shutil.which("brew")
-    if not brew:
-        return None
-    output = _command_output([brew, "--prefix", "openssl@3"])
-    if not output:
-        return None
-    prefix = output.strip().splitlines()[0].strip()
-    if prefix and openssl_headers_present(prefix):
-        return prefix
+def _working_compiler(
+    which: Callable[[str], str | None],
+    run: Callable[..., subprocess.CompletedProcess[str]],
+) -> str | None:
+    """Return a compiler that actually runs. Apple CLT stubs exist as /usr/bin/cc."""
+    candidates: list[str] = []
+    for name in ("cc", "clang"):
+        found = which(name)
+        if found and found not in candidates:
+            candidates.append(found)
+    developer_dir = _command_stdout(["xcode-select", "-p"], run)
+    if developer_dir:
+        for rel in ("usr/bin/clang", "usr/bin/cc"):
+            nested = str(Path(developer_dir) / rel)
+            if nested not in candidates:
+                candidates.append(nested)
+    for compiler in candidates:
+        if _command_succeeded(
+            [compiler, "-v"], run, needles=("clang", "gcc", "Apple LLVM")
+        ):
+            return compiler
     return None
 
 
-def intel_macos_openssl_ready() -> bool:
-    openssl_dir = os.environ.get("OPENSSL_DIR", "").strip()
-    if openssl_dir and openssl_headers_present(openssl_dir):
-        return True
-    if homebrew_openssl3_prefix():
-        return True
-    pkg_config = shutil.which("pkg-config")
-    if not pkg_config:
+def _has_openssl_libs(prefix: Path) -> bool:
+    lib = prefix / "lib"
+    if not lib.is_dir():
         return False
-    result = subprocess.run(
-        [pkg_config, "--exists", "libcrypto"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+    names = {path.name for path in lib.iterdir()}
+
+    def present(stem: str) -> bool:
+        return any(
+            name == f"lib{stem}.dylib"
+            or name == f"lib{stem}.a"
+            or name == f"lib{stem}.so"
+            or name.startswith(f"lib{stem}.")
+            and name.endswith(".dylib")
+            for name in names
+        )
+
+    return present("crypto") and present("ssl")
+
+
+def openssl_headers_are_usable(opensslv_h: str) -> bool:
+    """Accept OpenSSL 3+; reject LibreSSL and older OpenSSL."""
+    if re.search(r"^\s*#\s*define\s+LIBRESSL_VERSION_NUMBER\b", opensslv_h, re.M):
+        return False
+    major = re.search(
+        r"^\s*#\s*define\s+OPENSSL_VERSION_MAJOR\s+(\d+)", opensslv_h, re.M
     )
-    return result.returncode == 0
+    if major:
+        return int(major.group(1)) >= 3
+    number = re.search(
+        r"^\s*#\s*define\s+OPENSSL_VERSION_NUMBER\s+(0x[0-9a-fA-F]+)",
+        opensslv_h,
+        re.M,
+    )
+    if number:
+        return int(number.group(1), 16) >= 0x30000000
+    return False
 
 
-def intel_macos_cryptography_issues() -> list[str]:
-    """Missing official tools for a cryptography sdist build on Intel macOS."""
-    issues: list[str] = []
-    if not shutil.which("cc") and not shutil.which("clang"):
-        issues.append(
+def _openssl_prefix_if_present(prefix: str) -> str | None:
+    if not prefix:
+        return None
+    root = Path(prefix)
+    header = root / "include" / "openssl" / "ssl.h"
+    version_header = root / "include" / "openssl" / "opensslv.h"
+    if not header.is_file() or not version_header.is_file():
+        return None
+    if not _has_openssl_libs(root):
+        return None
+    try:
+        opensslv = version_header.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    if not openssl_headers_are_usable(opensslv):
+        return None
+    return prefix
+
+
+def probe_intel_macos_cryptography_toolchain(
+    *,
+    which: Callable[[str], str | None] = shutil.which,
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    environ: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """Discover a working compiler, rustc+cargo, and non-Apple OpenSSL 3 prefix."""
+    env = os.environ if environ is None else environ
+    compiler = _working_compiler(which, run)
+    rustc = which("rustc")
+    cargo = which("cargo")
+    rust_version = None
+    if rustc:
+        rust_version = parse_rustc_version(
+            _command_stdout([rustc, "--version"], run) or ""
+        )
+    cargo_ok = bool(
+        cargo and _command_succeeded([cargo, "--version"], run, needles=("cargo",))
+    )
+    openssl_dir = _openssl_prefix_if_present(env.get("OPENSSL_DIR", "").strip())
+    brew = which("brew")
+    if openssl_dir is None and brew:
+        for formula in ("openssl@3", "openssl"):
+            prefix = _command_stdout([brew, "--prefix", formula], run)
+            openssl_dir = _openssl_prefix_if_present(prefix or "")
+            if openssl_dir:
+                break
+    if openssl_dir is None:
+        openssl_dir = _openssl_prefix_if_present("/opt/local")
+    if openssl_dir is None:
+        pkg_config = which("pkg-config") or which("pkgconf")
+        if pkg_config:
+            prefix = _command_stdout(
+                [pkg_config, "--variable=prefix", "libcrypto"], run
+            )
+            openssl_dir = _openssl_prefix_if_present(prefix or "")
+    return {
+        "compiler": compiler,
+        "rustc": rustc,
+        "rust_version": rust_version,
+        "cargo": cargo if cargo_ok else None,
+        "openssl_dir": openssl_dir,
+    }
+
+
+def intel_macos_cryptography_missing(toolchain: dict[str, object]) -> list[str]:
+    missing: list[str] = []
+    if not toolchain.get("compiler"):
+        missing.append(
             "C compiler (clang). Install Xcode Command Line Tools: xcode-select --install"
         )
-    rustc = shutil.which("rustc")
-    cargo = shutil.which("cargo")
-    if not rustc or not cargo:
-        issues.append(
+    rust_version = toolchain.get("rust_version")
+    rust_ok = (
+        isinstance(rust_version, tuple)
+        and rust_version >= CRYPTOGRAPHY_MIN_RUST
+        and toolchain.get("cargo")
+    )
+    if not rust_ok:
+        missing.append(
             "Rust 1.83.0+ (rustc and cargo). Install with: brew install rust "
             f"— or rustup: https://rustup.rs. Docs: {PYCA_INSTALL_DOCS}"
         )
-    else:
-        parsed = parse_rustc_version(_command_output([rustc, "--version"]) or "")
-        if parsed is None or parsed < CRYPTOGRAPHY_MIN_RUST:
-            found = ".".join(str(part) for part in parsed) if parsed else "unknown"
-            issues.append(
-                "Rust 1.83.0 or newer is required to build cryptography "
-                f"(found {found}). Upgrade with rustup or: brew upgrade rust"
-            )
-    if not intel_macos_openssl_ready():
-        issues.append(
-            "OpenSSL 3 headers (Apple LibreSSL is not supported). "
+    if not toolchain.get("openssl_dir"):
+        missing.append(
+            "OpenSSL 3 headers and libssl/libcrypto (Apple LibreSSL is not supported). "
             "Install with: brew install openssl@3 "
             f"— {PYCA_INSTALL_DOCS}"
         )
-    return issues
+    return missing
 
 
-def intel_macos_cryptography_build_env() -> dict[str, str]:
-    """Point the official sdist at Homebrew OpenSSL 3 when OPENSSL_DIR is unset."""
+def intel_macos_cryptography_issues(
+    *,
+    which: Callable[[str], str | None] = shutil.which,
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    environ: dict[str, str] | None = None,
+) -> list[str]:
+    """Missing official tools for a cryptography sdist build on Intel macOS."""
+    return intel_macos_cryptography_missing(
+        probe_intel_macos_cryptography_toolchain(
+            which=which, run=run, environ=environ
+        )
+    )
+
+
+def apply_intel_macos_cryptography_env(
+    environ: dict[str, str], openssl_dir: str
+) -> dict[str, str]:
+    """Point the cryptography sdist at a real OpenSSL 3 prefix (PyCA OPENSSL_DIR)."""
+    environ["OPENSSL_DIR"] = openssl_dir
+    pkgconfig = Path(openssl_dir) / "lib" / "pkgconfig"
+    if pkgconfig.is_dir():
+        current = environ.get("PKG_CONFIG_PATH", "")
+        prefix = str(pkgconfig)
+        parts = [part for part in current.split(":") if part]
+        if prefix not in parts:
+            environ["PKG_CONFIG_PATH"] = ":".join([prefix, *parts])
+    return environ
+
+
+def intel_macos_cryptography_build_env(
+    *,
+    which: Callable[[str], str | None] = shutil.which,
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    environ: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Resolved OpenSSL 3 env for the sdist; ignores header-only / LibreSSL prefixes."""
     extra: dict[str, str] = {}
-    if os.environ.get("OPENSSL_DIR", "").strip():
-        return extra
-    prefix = homebrew_openssl3_prefix()
-    if not prefix:
-        return extra
-    extra["OPENSSL_DIR"] = prefix
-    pkgconfig = str(Path(prefix) / "lib" / "pkgconfig")
-    existing = os.environ.get("PKG_CONFIG_PATH", "").strip()
-    extra["PKG_CONFIG_PATH"] = f"{pkgconfig}:{existing}" if existing else pkgconfig
+    env = os.environ if environ is None else environ
+    toolchain = probe_intel_macos_cryptography_toolchain(
+        which=which, run=run, environ=env
+    )
+    openssl_dir = toolchain.get("openssl_dir")
+    if isinstance(openssl_dir, str) and openssl_dir:
+        apply_intel_macos_cryptography_env(extra, openssl_dir)
     return extra
 
 
@@ -251,21 +397,35 @@ def intel_macos_cryptography_error_lines(issues: list[str]) -> list[str]:
     return lines
 
 
-def prepare_intel_macos_cryptography_install() -> dict[str, str] | None:
+def prepare_intel_macos_cryptography_install(
+    *,
+    which: Callable[[str], str | None] = shutil.which,
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    environ: dict[str, str] | None = None,
+) -> dict[str, str] | None:
     """Preflight Intel macOS sdist tools. Returns extra env, or None on other hosts."""
     if not is_intel_macos():
         return None
-    issues = intel_macos_cryptography_issues()
+    env = os.environ if environ is None else environ
+    toolchain = probe_intel_macos_cryptography_toolchain(
+        which=which, run=run, environ=env
+    )
+    issues = intel_macos_cryptography_missing(toolchain)
     if issues:
         print("\n".join(intel_macos_cryptography_error_lines(issues)))
         wait_and_exit(1)
-    extra = intel_macos_cryptography_build_env()
+    extra: dict[str, str] = {}
+    openssl_dir = toolchain.get("openssl_dir")
+    if isinstance(openssl_dir, str) and openssl_dir:
+        apply_intel_macos_cryptography_env(extra, openssl_dir)
+        if environ is not None:
+            apply_intel_macos_cryptography_env(environ, openssl_dir)
     print(
         "  Intel macOS: cryptography >=50 will be built from the official sdist "
         "(no PyPI x86_64/universal2 wheel)."
     )
     if extra.get("OPENSSL_DIR"):
-        print(f"  Using Homebrew OpenSSL at {extra['OPENSSL_DIR']}")
+        print(f"  Using OpenSSL 3 at {extra['OPENSSL_DIR']}")
     return extra
 
 
@@ -276,16 +436,33 @@ def venv_command(python: str, venv_dir: Path, uv: str | None) -> list[str]:
 
 
 def deps_commands(
-    python: str, requirements: Path, uv: str | None
+    python: str,
+    requirements: Path,
+    uv: str | None,
+    *,
+    intel_macos: bool = False,
 ) -> list[tuple[list[str], str]]:
+    source_build = ["--no-binary", "cryptography"] if intel_macos else []
     if uv:
         return [(
-            [uv, "pip", "install", "--python", python, "-r", str(requirements)],
+            [
+                uv,
+                "pip",
+                "install",
+                "--python",
+                python,
+                "-r",
+                str(requirements),
+                *source_build,
+            ],
             "uv pip install",
         )]
     return [
         ([python, "-m", "pip", "install", "--upgrade", "pip", "-q"], "pip upgrade"),
-        ([python, "-m", "pip", "install", "-r", str(requirements)], "pip install"),
+        (
+            [python, "-m", "pip", "install", "-r", str(requirements), *source_build],
+            "pip install",
+        ),
     ]
 
 
@@ -333,6 +510,7 @@ def ensure_deps() -> None:
         return
 
     install_env = prepare_intel_macos_cryptography_install()
+    intel_macos = is_intel_macos()
 
     uv = find_uv()
     if uv:
@@ -344,7 +522,12 @@ def ensure_deps() -> None:
             wait_and_exit(1)
         print("  [2/3] Installing Python packages...")
 
-    for command, label in deps_commands(sys.executable, ROOT / "requirements.txt", uv):
+    for command, label in deps_commands(
+        sys.executable,
+        ROOT / "requirements.txt",
+        uv,
+        intel_macos=intel_macos,
+    ):
         run(*command, label=label, env=install_env)
     DEPS_STAMP.write_text(current_hash)
 
